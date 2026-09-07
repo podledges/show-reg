@@ -1,0 +1,17 @@
+{
+  "name": "show-me",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi register lookup from a local reference manual",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "repository": { "type": "git", "url": "https://github.com/podledges/show-me.git" },
+  "files": ["extensions/show-me/index.ts", "extensions/show-me/core.ts"],
+  "pi": { "extensions": ["./extensions/show-me/index.ts"] },
+  "scripts": { "test": "node --test extensions/show-me/core.test.ts" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*" },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true }
+  }
+}
