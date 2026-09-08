@@ -2,3 +2,5 @@ node_modules/
 .pi/
 *.pdf
 *.tmp
+*.swp
+desktop.ini
