@@ -37,7 +37,7 @@ This behavior is implemented by the extension itself, not a skill, so installing
 
 Requires Pi (tested with 0.84.1) and `pdftotext`. Optional `pdftoppm` supplies page images to image-capable models. The parser is tested against the MCX-C44X reference manual; other PDF layouts may need parser changes. Scanned PDFs need OCR first.
 
-[Commands and setup](extensions/show-reg/index.ts) · [PDF search](extensions/show-reg/core.ts)
+[Commands and setup](extensions/show-reg/index.ts) · [PDF search](extensions/show-reg/core.ts) · [Usability specification and roadmap](docs/planning/show-reg-usability-spec.md)
 
 ## Tests
 
