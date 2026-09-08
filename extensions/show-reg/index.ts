@@ -6,15 +6,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-<<<<<<< HEAD
-<<<<<<< HEAD
-import { type Config, DEFAULT_MANUAL, OUTPUT_RULES, cleanFilePath, createManualLoader, lookup, readConfig, renderPage, saveConfig, showRegSystemPrompt, sourceExcerpt, validateConfig } from "./core.ts";
-=======
-import { type Config, type Hint, type Register, DEFAULT_MANUAL, OUTPUT_RULES, cleanFilePath, createManualLoader, defaultPdfToText, deviceFromPath, discoverHints, discoverManuals, expandHome, listBrowsable, lookup, normalizeFieldBreaks, rankManuals, readConfig, renderPage, saveConfig, sourceExcerpt, storeManualPath, validateConfig } from "./core.ts";
->>>>>>> 18f2e4e (Add skill-driven register lookup and persistent cache)
-=======
-import { type Config, type DeviceProfile, type DeviceSelection, type HelperThinking, type Hint, type ManualIdentity, type Register, DEFAULT_MANUAL, OUTPUT_RULES, THINKING_LEVELS, cleanFilePath, createManualLoader, defaultPdfToText, discoverHints, discoverManuals, expandHome, listBrowsable, lookup, normalizeFieldBreaks, profileForTarget, rankManuals, readConfig, renderPage, resolveDeviceProfile, saveConfig, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
->>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
+import { type Config, type DeviceProfile, type DeviceSelection, type HelperThinking, type Hint, type ManualIdentity, type Register, DEFAULT_MANUAL, OUTPUT_RULES, THINKING_LEVELS, cleanFilePath, createManualLoader, defaultPdfToText, discoverHints, discoverManuals, expandHome, listBrowsable, lookup, normalizeFieldBreaks, profileForTarget, rankManuals, readConfig, renderPage, resolveDeviceProfile, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
 
 function projectRoot(cwd: string): string {
   let root = resolve(cwd);

@@ -6,15 +6,11 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-<<<<<<< HEAD
-<<<<<<< HEAD
-import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, cleanFilePath, createManualLoader, indexManual, lookup, matchesShowRegTrigger, readConfig, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, validateConfig } from "./core.ts";
-=======
-import { type Config, OUTPUT_RULES, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, sourceExcerpt, storeManualPath, validateConfig } from "./core.ts";
->>>>>>> 18f2e4e (Add skill-driven register lookup and persistent cache)
+import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, matchesShowRegTrigger, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const config: Config = { version: 1, target: "MCXC444", manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", preference: "accuracy" };
+const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
+const fixtureConfig: Config = { ...config, device: { profile: "custom", label: "Synthetic MCU", target: "SYNTH1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Synthetic Manual"], identityRegisters: ["MCG_C1"] } };
 test("turn gate matches only explicit show-reg names", () => {
   for (const prompt of [
     "show-reg", "/show-reg MCG->C1", "please use show-reg-config", "Try (SHOW-REG).",
@@ -49,16 +45,8 @@ test("turn gate preserves the base prompt, isolates output rules, and never accu
   assert.doesNotMatch(TURN_INSTRUCTIONS, new RegExp(OUTPUT_RULES.slice(0, 40), "i"));
 });
 
-const fixture = `Contents
-=======
-import { type Config, OUTPUT_RULES, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
-const fixtureConfig: Config = { ...config, device: { profile: "custom", label: "Synthetic MCU", target: "SYNTH1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Synthetic Manual"], identityRegisters: ["MCG_C1"] } };
 const fixture = `Synthetic Manual
 Contents
->>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
 27.2.1 MCG Control Register 1 (MCG_C1)........451
 \f27.2 Memory map and register definition
 Introduction
@@ -317,10 +305,12 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
   const { loadExtensions } = await import(pathToFileURL(join(packagePath, "dist/core/extensions/loader.js")).href);
   const loaded = await loadExtensions([join(root, "extensions/show-reg/index.ts")], root);
   assert.deepEqual(loaded.errors, []);
-<<<<<<< HEAD
   const extension = loaded.extensions[0];
   const commands = extension.commands;
+  const tools = extension.tools;
   assert.deepEqual([...commands.keys()].sort(), ["show-reg", "show-reg-config"]);
+  assert.deepEqual([...tools.keys()].sort(), ["show_register", "show_register_setup"]);
+  assert.ok(!commands.has("show-me") && !commands.has("show-me-config"));
   const gate = extension.handlers.get("before_agent_start");
   assert.equal(gate?.length, 1);
   const basePrompt = "Pi base prompt";
@@ -331,13 +321,6 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
     systemPrompt: basePrompt, systemPromptOptions: { cwd: root } }, {} as any);
   assert.deepEqual(hit, { systemPrompt: `${basePrompt}\n\n${TURN_INSTRUCTIONS}` });
   assert.doesNotMatch(hit!.systemPrompt!, /Explain the requested MCU register using ONLY/);
-=======
-  const commands = loaded.extensions[0].commands;
-  const tools = loaded.extensions[0].tools;
-  assert.deepEqual([...commands.keys()].sort(), ["show-reg", "show-reg-config"]);
-  assert.deepEqual([...tools.keys()].sort(), ["show_register", "show_register_setup"]);
-  assert.ok(!commands.has("show-me") && !commands.has("show-me-config"));
->>>>>>> 18f2e4e (Add skill-driven register lookup and persistent cache)
   if (!process.env.SHOW_REG_TEST_MANUAL) { t.diagnostic("Pi command loading passed; set SHOW_REG_TEST_MANUAL to also exercise real-PDF model mocks."); return; }
   const directory = await mkdtemp(join(tmpdir(), "show-reg-command-"));
   const messages: any[] = [];
@@ -364,22 +347,8 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
   } };
   const ctx: any = { cwd: directory, scopedModels: [], model, hasUI: true,
     ui: { setStatus() {}, notify() {}, confirm: async () => true, select: async () => undefined, input: async () => undefined },
-<<<<<<< HEAD
-    modelRegistry: { getAvailable: () => [model], complete: async (chosen: unknown, context: any) => {
-      calls++;
-      assert.equal(chosen, model);
-      assert.equal(context.messages.length, 1);
-      assert.equal(context.systemPrompt, OUTPUT_RULES);
-      assert.equal(context.tools, undefined);
-      assert.ok(context.messages[0].content[0].text.length < 10000);
-      assert.match(context.messages[0].content[0].text, /MCG_C1/);
-      assert.doesNotMatch(context.messages[0].content[0].text, /MCG_C2/);
-      return { stopReason: "stop", provider: "test", model: "reported-model", content: [{ type: "text", text: "Register answer" }] };
-    } } };
-=======
     modelRegistry: { getAvailable: () => [model], getProvider: () => provider,
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: { "x-test": "yes" } }) } };
->>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
   try {
     // Locate repository via a minimal temporary root without copying the manual.
     await writeFile(join(directory, "AGENTS.md"), "Test root");

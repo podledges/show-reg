@@ -28,19 +28,15 @@ The bundled skill lets the active chat model recognize natural-language register
 
 Parsed manual text is compressed under `.pi/show-reg-cache/`. The cache is project-local, ignored by Git, and invalidates automatically when the PDF, extractor or parser changes. It avoids rerunning `pdftotext` after Pi restarts.
 
-<<<<<<< HEAD
 ## Turn keyword gate
 
 Normal agent prompts get show-reg guidance only when their text contains the explicit, case-insensitive name `show-reg` or `show-reg-config`, optionally prefixed with `/`. The complete name, including any leading `/`, must not be adjacent to ASCII letters, digits, `_`, `/`, or `-`; near misses such as `show-registry`, `/show-reg-extra`, `show-reg/core.ts`, `show-reg-config/example`, and `PERIPH->REG` do not activate the gate.
 
-A miss returns no hook result. A hit preserves Pi's current chained system prompt and appends one short instruction block for that agent run. The block is not stored as a message or carried to the next turn, and repeated handling does not accumulate copies. Slash commands remain extension commands and are dispatched before agent processing. The main agent never receives the lookup model's `OUTPUT_RULES`; those rules remain the system prompt only for the isolated `modelRegistry.complete` request.
+A miss returns no hook result. A hit preserves Pi's current chained system prompt and appends one short instruction block for that agent run. The block is not stored as a message or carried to the next turn, and repeated handling does not accumulate copies. Slash commands remain extension commands and are dispatched before agent processing. The main agent never receives the lookup model's `OUTPUT_RULES`; those rules remain the system prompt only for the isolated Helper Assistant request.
 
-This behavior is implemented by the extension itself, not a skill, so installing show-reg does not add an entry to Pi's Skills list.
+This explicit-name gate is implemented by the extension and coexists with the bundled skill, which handles natural-language register intent and tool selection.
 
-`current` uses your active model. `automatic` estimates text cost from positive registry prices when you choose cost; otherwise it uses the current model. It does not benchmark quality or speed. The main chat model is not changed.
-=======
 `current` uses your active model as the separate Helper Assistant request. `automatic` estimates text cost from positive registry prices when you choose cost; otherwise it uses the current model. The Helper Assistant thinking level is independently configurable and checked against Pi's model capability metadata before every request. The main chat model and its thinking setting are not changed. The footer reports the requested level, never hidden chain-of-thought.
->>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
 
 The built-in `mcxc444-cg2271` profile requires the NXP MCX C44X document title, document number, supported-device marker, and representative registers on every cache path. The `esp32-s3-wroom-1` profile includes official Espressif source metadata but is intentionally preview-only until its PDF layout has fixtures. ESP DEVKIT 1 is not treated as an alias for that module.
 
