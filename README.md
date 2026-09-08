@@ -27,7 +27,7 @@ The extension searches the PDF locally, then sends only the matching register pa
 
 ## Turn keyword gate
 
-Normal agent prompts get show-reg guidance only when their text contains the explicit, case-insensitive name `show-reg`, `/show-reg`, or `show-reg-config`. Names must be separated from surrounding letters, digits, `_`, `/`, and `-`; near misses such as `show-registry`, `/show-reg-extra`, and `PERIPH->REG` do not activate the gate.
+Normal agent prompts get show-reg guidance only when their text contains the explicit, case-insensitive name `show-reg` or `show-reg-config`, optionally prefixed with `/`. The complete name, including any leading `/`, must not be adjacent to ASCII letters, digits, `_`, `/`, or `-`; near misses such as `show-registry`, `/show-reg-extra`, `show-reg/core.ts`, `show-reg-config/example`, and `PERIPH->REG` do not activate the gate.
 
 A miss returns no hook result. A hit preserves Pi's current chained system prompt and appends one short instruction block for that agent run. The block is not stored as a message or carried to the next turn, and repeated handling does not accumulate copies. Slash commands remain extension commands and are dispatched before agent processing. The main agent never receives the lookup model's `OUTPUT_RULES`; those rules remain the system prompt only for the isolated `modelRegistry.complete` request.
 
