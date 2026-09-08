@@ -4,7 +4,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { type Config, DEFAULT_MANUAL, OUTPUT_RULES, cleanFilePath, createManualLoader, lookup, readConfig, renderPage, saveConfig, sourceExcerpt, validateConfig } from "./core.ts";
+import { type Config, DEFAULT_MANUAL, OUTPUT_RULES, cleanFilePath, createManualLoader, lookup, readConfig, renderPage, saveConfig, showRegSystemPrompt, sourceExcerpt, validateConfig } from "./core.ts";
 
 function projectRoot(cwd: string): string {
   let root = resolve(cwd);
@@ -34,6 +34,10 @@ export default function showReg(pi: ExtensionAPI) {
   const loadManual = createManualLoader();
   let running: AbortController | undefined;
   pi.on("session_shutdown", async () => running?.abort());
+  pi.on("before_agent_start", (event) => {
+    const systemPrompt = showRegSystemPrompt(event.prompt, event.systemPrompt);
+    return systemPrompt === undefined ? undefined : { systemPrompt };
+  });
   pi.registerMessageRenderer("show-reg", (message) => new Markdown(String(message.content), 0, 0, getMarkdownTheme()));
   const show = (text: string, model?: string) => pi.sendMessage({ customType: "show-reg", display: true,
     content: `${text}\n\n— ${model ?? "show-reg (local lookup; no model called)"}` }, { triggerTurn: false });
