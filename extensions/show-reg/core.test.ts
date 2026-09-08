@@ -6,10 +6,33 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { type Config, cleanFilePath, createManualLoader, indexManual, lookup, readConfig, runText, saveConfig, sourceExcerpt, validateConfig } from "./core.ts";
+import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, cleanFilePath, createManualLoader, indexManual, lookup, matchesShowRegTrigger, readConfig, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, validateConfig } from "./core.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const config: Config = { version: 1, target: "MCXC444", manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", preference: "accuracy" };
+test("turn gate matches only explicit show-reg names", () => {
+  for (const prompt of [
+    "show-reg", "/show-reg MCG->C1", "please use show-reg-config", "Try (SHOW-REG).",
+  ]) assert.equal(matchesShowRegTrigger(prompt), true, prompt);
+
+  for (const prompt of [
+    "showreg", "show_reg", "myshow-reg", "show-registry", "show-reg-configure",
+    "/show-reg-extra", "//show-reg", "PERIPH->REG", "ordinary register question",
+  ]) assert.equal(matchesShowRegTrigger(prompt), false, prompt);
+});
+
+test("turn gate preserves the base prompt, isolates output rules, and never accumulates", () => {
+  const base = "Original system prompt\nwith configured instructions.";
+  assert.equal(showRegSystemPrompt("unrelated turn", base), undefined);
+  const hit = showRegSystemPrompt("Use show-reg for this", base);
+  assert.equal(hit, `${base}\n\n${TURN_INSTRUCTIONS}`);
+  assert.ok(TURN_INSTRUCTIONS.length < 400);
+  assert.equal(hit?.split(TURN_INSTRUCTIONS).length, 2);
+  assert.equal(showRegSystemPrompt("Use /show-reg again", hit!), hit);
+  assert.equal(showRegSystemPrompt("next unrelated turn", base), undefined);
+  assert.doesNotMatch(TURN_INSTRUCTIONS, new RegExp(OUTPUT_RULES.slice(0, 40), "i"));
+});
+
 const fixture = `Contents
 27.2.1 MCG Control Register 1 (MCG_C1)........451
 \f27.2 Memory map and register definition
@@ -122,8 +145,19 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
   const { loadExtensions } = await import(pathToFileURL(join(packagePath, "dist/core/extensions/loader.js")).href);
   const loaded = await loadExtensions([join(root, "extensions/show-reg/index.ts")], root);
   assert.deepEqual(loaded.errors, []);
-  const commands = loaded.extensions[0].commands;
+  const extension = loaded.extensions[0];
+  const commands = extension.commands;
   assert.deepEqual([...commands.keys()].sort(), ["show-reg", "show-reg-config"]);
+  const gate = extension.handlers.get("before_agent_start");
+  assert.equal(gate?.length, 1);
+  const basePrompt = "Pi base prompt";
+  const miss = await gate![0]({ type: "before_agent_start", prompt: "unrelated", images: undefined,
+    systemPrompt: basePrompt, systemPromptOptions: { cwd: root } }, {} as any);
+  assert.equal(miss, undefined);
+  const hit = await gate![0]({ type: "before_agent_start", prompt: "please use show-reg", images: undefined,
+    systemPrompt: basePrompt, systemPromptOptions: { cwd: root } }, {} as any);
+  assert.deepEqual(hit, { systemPrompt: `${basePrompt}\n\n${TURN_INSTRUCTIONS}` });
+  assert.doesNotMatch(hit!.systemPrompt!, /Explain the requested MCU register using ONLY/);
   if (!process.env.SHOW_REG_TEST_MANUAL) { t.diagnostic("Pi command loading passed; set SHOW_REG_TEST_MANUAL to also exercise real-PDF model mocks."); return; }
   const directory = await mkdtemp(join(tmpdir(), "show-reg-command-"));
   const messages: any[] = [];
@@ -137,6 +171,7 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
       calls++;
       assert.equal(chosen, model);
       assert.equal(context.messages.length, 1);
+      assert.equal(context.systemPrompt, OUTPUT_RULES);
       assert.equal(context.tools, undefined);
       assert.ok(context.messages[0].content[0].text.length < 10000);
       assert.match(context.messages[0].content[0].text, /MCG_C1/);
