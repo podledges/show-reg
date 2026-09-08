@@ -178,12 +178,14 @@ After synthetic acceptance, maintainers may run bounded checks against a small s
 
 ## Implementation issues
 
-No pre-existing issues were present when this specification was prepared. The sequenced issue set will be linked here after publication:
+No pre-existing issues were present when this specification was prepared. Implement in this sequence:
 
-1. Resolve extractor packaging and open policy decisions — pending
-2. Build multi-document extraction, configuration, and cache foundations — pending
-3. Implement grounded natural AND-first lookup across documents — pending
-4. Integrate skill-guided chat and session-inheriting slash rendering — pending
+1. [#5 — Package a coordinate-capable PDF extractor and settle lookup policies](https://github.com/podledges/show-reg/issues/5)
+2. [#6 — Build multi-document extraction, configuration, and cache foundations](https://github.com/podledges/show-reg/issues/6) — depends on #5
+3. [#7 — Implement grounded natural AND-first lookup across documents](https://github.com/podledges/show-reg/issues/7) — depends on #6
+4. [#8 — Integrate skill-guided chat and session-inheriting slash rendering](https://github.com/podledges/show-reg/issues/8) — depends on #7
+
+Planning and review are tracked in [PR #4](https://github.com/podledges/show-reg/pull/4).
 
 ## Remaining product decisions
 
