@@ -15,7 +15,7 @@ export type Config = {
 export type Register = { section: string; title: string; id: string; page: number; endPage: number; line: number; endLine?: number };
 export type Manual = { pages: string[]; registers: Register[] };
 
-const SHOW_REG_TRIGGER = /(?:^|[^A-Za-z0-9_\/-])(?:\/?show-reg(?:-config)?)(?=$|[^A-Za-z0-9_-])/i;
+const SHOW_REG_TRIGGER = /(?:^|[^A-Za-z0-9_\/-])(?:\/?show-reg(?:-config)?)(?=$|[^A-Za-z0-9_\/-])/i;
 
 export const TURN_INSTRUCTIONS = `## show-reg (this turn only)
 The user explicitly mentioned show-reg. For MCU register details, rely on the extension's configured local manual and isolated lookup model rather than guessing. \`/show-reg <register>\` performs a lookup; \`/show-reg-config\` manages its settings.`;

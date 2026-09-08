@@ -13,12 +13,23 @@ const config: Config = { version: 1, target: "MCXC444", manual: process.env.SHOW
 test("turn gate matches only explicit show-reg names", () => {
   for (const prompt of [
     "show-reg", "/show-reg MCG->C1", "please use show-reg-config", "Try (SHOW-REG).",
+    "/show-reg-config", "Try /SHOW-REG-CONFIG.",
   ]) assert.equal(matchesShowRegTrigger(prompt), true, prompt);
 
   for (const prompt of [
     "showreg", "show_reg", "myshow-reg", "show-registry", "show-reg-configure",
     "/show-reg-extra", "//show-reg", "PERIPH->REG", "ordinary register question",
   ]) assert.equal(matchesShowRegTrigger(prompt), false, prompt);
+});
+
+test("turn gate rejects trailing slash path continuations without guidance", () => {
+  for (const prompt of [
+    "Inspect show-reg/core.ts", "Inspect show-reg-config/example",
+    "Inspect /show-reg/core.ts", "Inspect /show-reg-config/example",
+  ]) {
+    assert.equal(matchesShowRegTrigger(prompt), false, prompt);
+    assert.equal(showRegSystemPrompt(prompt, "Original system prompt"), undefined, prompt);
+  }
 });
 
 test("turn gate preserves the base prompt, isolates output rules, and never accumulates", () => {
