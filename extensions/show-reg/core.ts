@@ -26,27 +26,30 @@ export function validateConfig(value: unknown): Config {
   if (!c || c.version !== 1 || ![c.target, c.manual, c.pdftotext, c.model].every(
     (v) => typeof v === "string" && v.trim().length > 0 && v.length <= 1024,
   ) || !["accuracy", "speed", "cost"].includes(c.preference)) {
-    throw new Error("Invalid show-me configuration. Run /show-me-config to replace it.");
+    throw new Error("Invalid show-reg configuration. Run /show-reg-config to replace it.");
   }
   return { version: 1, target: c.target, manual: c.manual, pdftotext: c.pdftotext,
     model: c.model, preference: c.preference };
 }
 
 export async function readConfig(root: string): Promise<Config | undefined> {
-  try { return validateConfig(JSON.parse(await readFile(join(root, ".pi/show-me.json"), "utf8"))); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error("Cannot read .pi/show-me.json. Run /show-me-config to repair it.");
+  for (const relative of [".pi/show-reg.json", ".pi/show-me.json"]) {
+    try { return validateConfig(JSON.parse(await readFile(join(root, relative), "utf8"))); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(`Cannot read ${relative}. Run /show-reg-config to repair it.`);
+    }
   }
+  return undefined;
 }
 
 export async function saveConfig(root: string, config: Config): Promise<void> {
   const checked = validateConfig(config);
   await mkdir(join(root, ".pi"), { recursive: true });
-  const temporary = join(root, `.pi/show-me.${randomUUID()}.tmp`);
+  const temporary = join(root, `.pi/show-reg.${randomUUID()}.tmp`);
   try {
     await writeFile(temporary, JSON.stringify(checked, null, 2) + "\n", { mode: 0o600 });
-    await rename(temporary, join(root, ".pi/show-me.json"));
+    await rename(temporary, join(root, ".pi/show-reg.json"));
   } finally { await unlink(temporary).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
 }
 
@@ -55,7 +58,7 @@ export function runText(executable: string, args: string[], signal?: AbortSignal
   return new Promise((accept, reject) => {
     execFile(executable, args, { encoding: "utf8", windowsHide: true,
       maxBuffer: 32 * 1024 * 1024, timeout: 60_000, signal }, (error, stdout) => {
-      if (error) reject(new Error(`PDF extraction failed (${(error as NodeJS.ErrnoException).code ?? "process error"}). Check the manual and pdftotext path in /show-me-config.`));
+      if (error) reject(new Error(`PDF extraction failed (${(error as NodeJS.ErrnoException).code ?? "process error"}). Check the manual and pdftotext path in /show-reg-config.`));
       else accept(stdout);
     });
   });
@@ -149,7 +152,7 @@ export function createManualLoader() {
   return async (root: string, config: Config, signal?: AbortSignal): Promise<Manual> => {
     const path = resolve(root, config.manual);
     const info = await stat(path).catch(() => {
-      throw new Error(`Cannot access PDF: ${path}. Check the filepath in /show-me-config.`);
+      throw new Error(`Cannot access PDF: ${path}. Check the filepath in /show-reg-config.`);
     });
     if (!info.isFile()) throw new Error(`Expected a PDF file, not a directory: ${path}`);
     const key = `${path}:${info.size}:${info.mtimeMs}:${config.pdftotext}`;

@@ -9,7 +9,7 @@ import { type Config, DEFAULT_MANUAL, OUTPUT_RULES, cleanFilePath, createManualL
 function projectRoot(cwd: string): string {
   let root = resolve(cwd);
   while (true) {
-    if (existsSync(join(root, ".git")) || existsSync(join(root, ".pi/show-me.json"))) return root;
+    if (existsSync(join(root, ".git")) || existsSync(join(root, ".pi/show-reg.json")) || existsSync(join(root, ".pi/show-me.json"))) return root;
     const parent = dirname(root);
     if (parent === root) return resolve(cwd);
     root = parent;
@@ -30,15 +30,15 @@ function findPdfText(): string {
   return candidates.find((p): p is string => !!p && existsSync(p)) ?? "pdftotext";
 }
 
-export default function showMe(pi: ExtensionAPI) {
+export default function showReg(pi: ExtensionAPI) {
   const loadManual = createManualLoader();
   let running: AbortController | undefined;
   pi.on("session_shutdown", async () => running?.abort());
-  pi.registerMessageRenderer("show-me", (message) => new Markdown(String(message.content), 0, 0, getMarkdownTheme()));
-  const show = (text: string, model?: string) => pi.sendMessage({ customType: "show-me", display: true,
-    content: `${text}\n\n— ${model ?? "show-me (local lookup; no model called)"}` }, { triggerTurn: false });
+  pi.registerMessageRenderer("show-reg", (message) => new Markdown(String(message.content), 0, 0, getMarkdownTheme()));
+  const show = (text: string, model?: string) => pi.sendMessage({ customType: "show-reg", display: true,
+    content: `${text}\n\n— ${model ?? "show-reg (local lookup; no model called)"}` }, { triggerTurn: false });
 
-  pi.registerCommand("show-me-config", {
+  pi.registerCommand("show-reg-config", {
     description: "Configure local register lookup and its model; use 'show' to inspect settings",
     handler: async (args, ctx) => {
       try {
@@ -46,11 +46,11 @@ export default function showMe(pi: ExtensionAPI) {
         let old: Config | undefined;
         try { old = await readConfig(root); } catch { ctx.ui.notify("Existing settings are invalid; configuration will replace them.", "warning"); }
         if (args.trim() === "show") {
-          show(old ? `Saved in .pi/show-me.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. Run /show-me-config.");
+          show(old ? `Saved in .pi/show-reg.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. Run /show-reg-config.");
           return;
         }
-        if (args.trim()) throw new Error("Use /show-me-config or /show-me-config show.");
-        if (!ctx.hasUI) throw new Error("Configuration requires interactive Pi. Run /show-me-config there first.");
+        if (args.trim()) throw new Error("Use /show-reg-config or /show-reg-config show.");
+        if (!ctx.hasUI) throw new Error("Configuration requires interactive Pi. Run /show-reg-config there first.");
         const models = availableModels(ctx);
         if (!models.length) throw new Error("No authenticated models available in Pi. Configure a provider first.");
         const target = await ctx.ui.input("Target device", old?.target ?? "");
@@ -71,16 +71,16 @@ export default function showMe(pi: ExtensionAPI) {
         const indexed = await loadManual(root, config);
         if (!await ctx.ui.confirm("Save personal lookup settings?", `${indexed.registers.length} register sections found. Model: ${model}. Preference: ${preference}. Each successful lookup sends only the matched source pages to that provider. Automatic selection is a price heuristic, not a quality or speed benchmark.`)) return;
         await saveConfig(root, config);
-        show("Saved personal settings in `.pi/show-me.json`. Keep this file out of Git. Try `/show-me MCG->C1`.");
+        show("Saved personal settings in `.pi/show-reg.json`. Keep this file out of Git. Try `/show-reg MCG->C1`.");
       } catch (error) { show(`Configuration failed: ${error instanceof Error ? error.message : "Unknown error"}`); }
     },
   });
 
-  pi.registerCommand("show-me", {
-    description: "Show a register's bits and encodings: /show-me MCG->C1 (or /show-me cancel)",
+  pi.registerCommand("show-reg", {
+    description: "Show a register's bits and encodings: /show-reg MCG->C1 (or /show-reg cancel)",
     handler: async (args, ctx) => {
       if (args.trim() === "cancel") { running?.abort(); return; }
-      if (running) { ctx.ui.notify("A lookup is running. Use /show-me cancel first.", "warning"); return; }
+      if (running) { ctx.ui.notify("A lookup is running. Use /show-reg cancel first.", "warning"); return; }
       running = new AbortController();
       const controller = running;
       const timeout = setTimeout(() => controller.abort(), 180_000);
@@ -88,15 +88,15 @@ export default function showMe(pi: ExtensionAPI) {
       try {
         const root = projectRoot(ctx.cwd);
         const config = await readConfig(root);
-        if (!config) throw new Error("Run /show-me-config before the first lookup.");
+        if (!config) throw new Error("Run /show-reg-config before the first lookup.");
         let query = args.trim();
         if (!query) {
-          if (!ctx.hasUI) throw new Error("Provide a register: /show-me <register>.");
+          if (!ctx.hasUI) throw new Error("Provide a register: /show-reg <register>.");
           query = (await ctx.ui.input("Register identifier or manual title"))?.trim() ?? "";
           if (!query) return;
         }
         if (query.length > 200) throw new Error("Register query is limited to 200 characters.");
-        ctx.ui.setStatus("show-me", "Searching manual locally…");
+        ctx.ui.setStatus("show-reg", "Searching manual locally…");
         const manual = await loadManual(root, config, controller.signal);
         const result = lookup(manual.registers, query);
         if (!result.exact) {
@@ -113,8 +113,8 @@ export default function showMe(pi: ExtensionAPI) {
               .sort((a, b) => (a.cost.input * excerpt.length / 4 + a.cost.output * 4096) - (b.cost.input * excerpt.length / 4 + b.cost.output * 4096))[0];
           }
         }
-        if (!model) throw new Error("Configured model is unavailable, outside the session scope, or has no usable price estimate. Run /show-me-config; no substitute was called.");
-        if (model.contextWindow < excerpt.length + 8192) throw new Error("Selected model's context limit is too small for this section. Choose another model in /show-me-config.");
+        if (!model) throw new Error("Configured model is unavailable, outside the session scope, or has no usable price estimate. Run /show-reg-config; no substitute was called.");
+        if (model.contextWindow < excerpt.length + 8192) throw new Error("Selected model's context limit is too small for this section. Choose another model in /show-reg-config.");
         if (typeof ctx.modelRegistry.complete !== "function") throw new Error("This extension requires Pi's modelRegistry.complete API (tested with Pi 0.84.1).");
         const images: { type: "image"; data: string; mimeType: string }[] = [];
         if (model.input.includes("image")) {
@@ -130,7 +130,7 @@ export default function showMe(pi: ExtensionAPI) {
         const sourceMode = images.length ? "Text and page images, in PDF page order; verify table alignment against images." : "Text only; page images unavailable. Explicitly flag any ambiguous diagram or field alignment.";
         if (!images.length) ctx.ui.notify("Using extracted text only; page images are unavailable for this tool/model.", "warning");
         modelIdentity = `${model.provider}/${model.id} (request attempted)`;
-        ctx.ui.setStatus("show-me", `${result.exact.id} → ${modelIdentity}`);
+        ctx.ui.setStatus("show-reg", `${result.exact.id} → ${modelIdentity}`);
         ctx.ui.notify(`Reading PDF pages ${result.exact.page}–${result.exact.endPage} with ${modelIdentity}`, "info");
         const response = await ctx.modelRegistry.complete(model, {
           systemPrompt: OUTPUT_RULES,
@@ -147,7 +147,7 @@ export default function showMe(pi: ExtensionAPI) {
       } finally {
         clearTimeout(timeout);
         running = undefined;
-        ctx.ui.setStatus("show-me", undefined);
+        ctx.ui.setStatus("show-reg", undefined);
       }
     },
   });
