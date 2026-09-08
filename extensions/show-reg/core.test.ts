@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 <<<<<<< HEAD
+<<<<<<< HEAD
 import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, cleanFilePath, createManualLoader, indexManual, lookup, matchesShowRegTrigger, readConfig, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, validateConfig } from "./core.ts";
 =======
 import { type Config, OUTPUT_RULES, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, sourceExcerpt, storeManualPath, validateConfig } from "./core.ts";
@@ -49,6 +50,15 @@ test("turn gate preserves the base prompt, isolates output rules, and never accu
 });
 
 const fixture = `Contents
+=======
+import { type Config, OUTPUT_RULES, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
+const fixtureConfig: Config = { ...config, device: { profile: "custom", label: "Synthetic MCU", target: "SYNTH1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Synthetic Manual"], identityRegisters: ["MCG_C1"] } };
+const fixture = `Synthetic Manual
+Contents
+>>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
 27.2.1 MCG Control Register 1 (MCG_C1)........451
 \f27.2 Memory map and register definition
 Introduction
@@ -172,7 +182,7 @@ test("PDF paths accept Explorer quotes and report invalid files clearly", async 
 test("manual cache survives extension reload and invalidates with the PDF", async () => {
   const directory = await mkdtemp(join(tmpdir(), "show-reg-cache-"));
   const pdf = join(directory, "manual.pdf");
-  const local = { ...config, manual: pdf };
+  const local = { ...fixtureConfig, manual: pdf };
   let extractions = 0;
   const extract = async () => { extractions++; return fixture; };
   try {
@@ -188,11 +198,31 @@ test("manual cache survives extension reload and invalidates with the PDF", asyn
     assert.equal(second.registers.length, 3);
     assert.equal(extractions, 1);
 
+    await writeFile(join(directory, ".pi", "show-reg-cache", files[0]), "corrupt");
+    await createManualLoader(extract)(directory, local);
+    assert.equal(extractions, 2);
+
     await writeFile(pdf, "%PDF changed");
     const future = new Date(Date.now() + 2_000);
     await utimes(pdf, future, future);
     await createManualLoader(extract)(directory, local);
-    assert.equal(extractions, 2);
+    assert.equal(extractions, 3);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("device identity is enforced on cold, disk and warm cache paths", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "show-reg-identity-"));
+  const pdf = join(directory, "manual.pdf");
+  const local = { ...fixtureConfig, manual: pdf };
+  try {
+    await writeFile(pdf, "%PDF synthetic");
+    const load = createManualLoader(async () => fixture);
+    const manual = await load(directory, local);
+    assert.equal(validateManualForDevice(manual, local.device).profile, "custom");
+    const wrong = { ...local, device: { ...local.device, evidence: ["Different Device"] } } as Config;
+    await assert.rejects(load(directory, wrong), /Manual\/profile mismatch/);
+    await assert.rejects(createManualLoader(async () => { throw new Error("must use disk cache"); })(directory, wrong), /Manual\/profile mismatch/);
+    await assert.rejects(createManualLoader(async () => fixture)(directory, { ...local, device: { profile: "esp32-s3-wroom-1" } }), /preview/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -233,8 +263,14 @@ test("config survives restart, replaces cleanly, validates and rejects corrupt d
     assert.equal((await readConfig(directory))?.model, "legacy/model");
     await saveConfig(directory, { ...config, model: "example/model" });
     assert.equal((await readConfig(directory))?.model, "example/model");
-    assert.throws(() => validateConfig({ ...config, version: 2 }));
+    const migrated = validateConfig({ version: 1, target: "MCXC444", manual: "manual.pdf", pdftotext: "pdftotext", model: "current", preference: "accuracy" });
+    assert.equal(migrated.device.profile, "mcxc444-cg2271");
+    assert.equal(migrated.thinking, "auto");
+    assert.throws(() => validateConfig({ version: 1, target: "UNKNOWN123", manual: "manual.pdf", pdftotext: "pdftotext", model: "current", preference: "accuracy" }), /unknown device/);
+    assert.throws(() => validateConfig({ ...config, version: 3 }));
+    assert.throws(() => validateConfig({ ...config, device: { profile: "not-real" } }), /Unknown device profile/);
     assert.throws(() => validateConfig({ ...config, manual: "" }));
+    assert.throws(() => validateConfig({ ...config, device: { profile: "custom", label: "x", target: "x", aliases: [], manualHints: [], sourceLinks: [], evidence: [], identityRegisters: [] } }));
     await writeFile(join(directory, ".pi/show-reg.json"), "broken");
     await assert.rejects(readConfig(directory), /repair/);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -254,6 +290,9 @@ test("process arguments are literal, not shell input", async () => {
 test("real manual: different peripherals, title aliases and bounded source", async (t) => {
   if (!process.env.SHOW_REG_TEST_MANUAL) { t.skip("Set SHOW_REG_TEST_MANUAL to the MCX-C44X reference PDF for this optional integration test."); return; }
   const manual = await createManualLoader()(root, config);
+  const identity = validateManualForDevice(manual, config.device);
+  assert.deepEqual(identity.evidence, ["MCX C44X Sub-Family Reference Manual", "MCXC44XP64M48RM", "MCXC4x4(R)"]);
+  assert.ok(identity.registers.includes("TPMx_SC"));
   for (const [query, page] of [["MCG->C1", 451], ["MCG_C2", 452], ["SIM_SCGC5", 172], ["PORTx_PCRn", 149], ["UARTx_C2", 701], ["MDM-AP Control Register", 111]] as const) {
     const result = lookup(manual.registers, query);
     assert.equal(result.exact?.page, page, query);
@@ -296,7 +335,7 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
   const commands = loaded.extensions[0].commands;
   const tools = loaded.extensions[0].tools;
   assert.deepEqual([...commands.keys()].sort(), ["show-reg", "show-reg-config"]);
-  assert.deepEqual([...tools.keys()], ["show_register"]);
+  assert.deepEqual([...tools.keys()].sort(), ["show_register", "show_register_setup"]);
   assert.ok(!commands.has("show-me") && !commands.has("show-me-config"));
 >>>>>>> 18f2e4e (Add skill-driven register lookup and persistent cache)
   if (!process.env.SHOW_REG_TEST_MANUAL) { t.diagnostic("Pi command loading passed; set SHOW_REG_TEST_MANUAL to also exercise real-PDF model mocks."); return; }
@@ -305,9 +344,27 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
   // Runtime message injection is replaced; no provider or active Pi session is used.
   loaded.runtime.sendMessage = (message: unknown) => messages.push(message);
   let calls = 0;
-  const model = { provider: "test", id: "chosen", input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 1, output: 1 } };
+  const model = { provider: "test", id: "chosen", input: ["text"], reasoning: true, contextWindow: 128000, maxTokens: 8192, cost: { input: 1, output: 1 } };
+  let responseFactory: (chosen: unknown, context: any, options: any) => any = async (chosen, context, options) => {
+    calls++;
+    assert.equal(chosen, model);
+    assert.equal(options.reasoning, "medium");
+    assert.equal(options.apiKey, "test-key");
+    assert.equal(options.headers["x-test"], "yes");
+    assert.equal(options.cacheRetention, "none");
+    assert.equal(context.messages.length, 1);
+    assert.equal(context.tools, undefined);
+    assert.ok(context.messages[0].content[0].text.length < 10000);
+    assert.match(context.messages[0].content[0].text, /MCG_C1/);
+    assert.doesNotMatch(context.messages[0].content[0].text, /MCG_C2/);
+    return { stopReason: "stop", provider: "test", model: "reported-model", content: [{ type: "text", text: "Register answer" }] };
+  };
+  const provider = { streamSimple(chosen: unknown, context: any, options: any) {
+    return { result: () => responseFactory(chosen, context, options) };
+  } };
   const ctx: any = { cwd: directory, scopedModels: [], model, hasUI: true,
     ui: { setStatus() {}, notify() {}, confirm: async () => true, select: async () => undefined, input: async () => undefined },
+<<<<<<< HEAD
     modelRegistry: { getAvailable: () => [model], complete: async (chosen: unknown, context: any) => {
       calls++;
       assert.equal(chosen, model);
@@ -319,26 +376,41 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
       assert.doesNotMatch(context.messages[0].content[0].text, /MCG_C2/);
       return { stopReason: "stop", provider: "test", model: "reported-model", content: [{ type: "text", text: "Register answer" }] };
     } } };
+=======
+    modelRegistry: { getAvailable: () => [model], getProvider: () => provider,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: { "x-test": "yes" } }) } };
+>>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
   try {
     // Locate repository via a minimal temporary root without copying the manual.
     await writeFile(join(directory, "AGENTS.md"), "Test root");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(join(directory, "datasheets"));
     await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.equal((await readConfig(directory))?.target, "MCXC444");
-    assert.match(messages.at(-1).content, /— test\/reported-model/);
+    assert.equal((await readConfig(directory))?.device.profile, "mcxc444-cg2271");
+    assert.match(messages.at(-1).content, /Helper Assistant test\/reported-model · thinking medium/);
     assert.equal(calls, 1);
     await commands.get("show-reg").handler("MCG_C9", ctx);
     assert.match(messages.at(-1).content, /Did you mean/);
     assert.equal(calls, 1);
     await commands.get("show-reg").handler("MCG_C1", ctx);
     assert.equal(calls, 2);
-    assert.match(messages.at(-1).content, /— test\/reported-model/);
+    assert.match(messages.at(-1).content, /Helper Assistant test\/reported-model/);
     assert.ok(commands.get("show-reg").getArgumentCompletions("MCG_C").some((item: any) => item.value === "MCG_C1"));
     const toolResult = await tools.get("show_register").definition.execute("test-call", { register: "MCG_C1" }, undefined, undefined, ctx);
     assert.equal(calls, 3);
     assert.match(toolResult.content[0].text, /Register answer/);
-    assert.match(toolResult.content[0].text, /— test\/reported-model/);
+    assert.match(toolResult.content[0].text, /Helper Assistant test\/reported-model/);
+    const setupResult = await tools.get("show_register_setup").definition.execute("setup-call", {}, undefined, undefined, ctx);
+    assert.match(setupResult.content[0].text, /Validated recommended answers/);
+    assert.equal(calls, 3);
+    await saveConfig(directory, { ...config, manual: resolve(root, config.manual), device: { profile: "custom", label: "Wrong manual", target: "WRONG1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Definitely not this document"], identityRegisters: ["MCG_C1"] } });
+    await commands.get("show-reg").handler("MCG_C1", ctx);
+    assert.match(messages.at(-1).content, /Manual\/profile mismatch/);
+    assert.equal(calls, 3);
+    await saveConfig(directory, { ...config, manual: resolve(root, config.manual), thinking: "max" });
+    await commands.get("show-reg").handler("MCG_C1", ctx);
+    assert.match(messages.at(-1).content, /does not support Helper Assistant thinking=max/);
+    assert.equal(calls, 3);
     await saveConfig(directory, { ...config, manual: resolve(root, config.manual), model: "missing/model" });
     await commands.get("show-reg").handler("MCG_C1", ctx);
     assert.match(messages.at(-1).content, /unavailable/);
@@ -353,13 +425,13 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
     assert.match(messages.at(-1).content, /unavailable/);
     assert.equal(calls, 3);
     ctx.scopedModels = [];
-    ctx.modelRegistry.complete = async () => ({ stopReason: "length", content: [{ type: "text", text: "Incomplete answer" }] });
+    responseFactory = async () => ({ stopReason: "length", content: [{ type: "text", text: "Incomplete answer" }] });
     await commands.get("show-reg").handler("MCG_C1", ctx);
     assert.match(messages.at(-1).content, /truncated/);
     assert.doesNotMatch(messages.at(-1).content, /Incomplete answer/);
     let requestStarted!: () => void;
     const started = new Promise<void>((done) => { requestStarted = done; });
-    ctx.modelRegistry.complete = async (_model: unknown, _context: unknown, options: any) => {
+    responseFactory = async (_model: unknown, _context: unknown, options: any) => {
       requestStarted();
       return new Promise((_accept, reject) => options.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
     };

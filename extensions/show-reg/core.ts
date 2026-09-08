@@ -9,20 +9,45 @@ import { gzip, gunzip } from "node:zlib";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const MANUAL_CACHE_VERSION = 1;
+const MANUAL_CACHE_VERSION = 2;
 
 export const DEFAULT_MANUAL = "";
-export type Config = {
-  version: 1;
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type HelperThinking = (typeof THINKING_LEVELS)[number] | "auto";
+export type DeviceProfile = {
+  id: string;
+  label: string;
   target: string;
+  aliases: string[];
+  manualHints: string[];
+  sourceLinks: string[];
+  evidence: string[];
+  identityRegisters: string[];
+  status: "validated" | "preview" | "custom";
+};
+export type DeviceSelection = { profile: "mcxc444-cg2271" | "esp32-s3-wroom-1" } | {
+  profile: "custom";
+  label: string;
+  target: string;
+  aliases: string[];
+  manualHints: string[];
+  sourceLinks: string[];
+  evidence: string[];
+  identityRegisters: string[];
+};
+export type Config = {
+  version: 2;
+  device: DeviceSelection;
   manual: string;
   pdftotext: string;
   model: string;
+  thinking: HelperThinking;
   preference: "accuracy" | "speed" | "cost";
 };
 export type Register = { section: string; title: string; id: string; page: number; endPage: number; line: number; endLine?: number };
 export type Manual = { pages: string[]; registers: Register[] };
 
+<<<<<<< HEAD
 const SHOW_REG_TRIGGER = /(?:^|[^A-Za-z0-9_\/-])(?:\/?show-reg(?:-config)?)(?=$|[^A-Za-z0-9_\/-])/i;
 
 export const TURN_INSTRUCTIONS = `## show-reg (this turn only)
@@ -37,6 +62,35 @@ export function showRegSystemPrompt(prompt: string, systemPrompt: string): strin
   if (systemPrompt.includes(TURN_INSTRUCTIONS)) return systemPrompt;
   return `${systemPrompt}\n\n${TURN_INSTRUCTIONS}`;
 }
+=======
+export const DEVICE_PROFILES: Readonly<Record<"mcxc444-cg2271" | "esp32-s3-wroom-1", DeviceProfile>> = {
+  "mcxc444-cg2271": {
+    id: "mcxc444-cg2271",
+    label: "MCXC444 — CG2271 Labs",
+    target: "MCXC444",
+    aliases: ["MCXC444", "FRDM-MCXC444"],
+    manualHints: ["MCX-C44X-Sub-Family-Reference-Manual.pdf", "MCXC44XP64M48RM"],
+    sourceLinks: ["https://www.nxp.com/products/MCX-C14x-24x-44x"],
+    evidence: ["MCX C44X Sub-Family Reference Manual", "MCXC44XP64M48RM", "MCXC4x4(R)"],
+    identityRegisters: ["MCG_C1", "SIM_SCGC5", "PORTx_PCRn", "TPMx_SC"],
+    status: "validated",
+  },
+  "esp32-s3-wroom-1": {
+    id: "esp32-s3-wroom-1",
+    label: "ESP32-S3-WROOM-1 — preview",
+    target: "ESP32-S3-WROOM-1",
+    aliases: ["ESP32-S3-WROOM-1", "ESP32-S3"],
+    manualHints: ["esp32-s3_technical_reference_manual_en.pdf"],
+    sourceLinks: [
+      "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/hw-reference/index.html",
+      "https://documentation.espressif.com/esp32-s3_technical_reference_manual_en.pdf",
+    ],
+    evidence: ["ESP32-S3 Technical Reference Manual", "ESP32-S3 SoC"],
+    identityRegisters: [],
+    status: "preview",
+  },
+};
+>>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
 
 export function cleanFilePath(value: string): string {
   const path = value.trim();
@@ -163,6 +217,12 @@ export function canonicalDevice(value: string): string {
   return compact || stripped.toUpperCase();
 }
 
+export function profileForTarget(value: string): DeviceProfile | undefined {
+  const key = normalize(value);
+  return Object.values(DEVICE_PROFILES).find((profile) => profile.status !== "preview"
+    && [profile.target, ...profile.aliases].some((alias) => normalize(alias) === key));
+}
+
 export function devicesFromText(text: string): string[] {
   const found: string[] = [];
   const add = (raw?: string) => {
@@ -190,13 +250,15 @@ export function defaultPdfToText(): string {
   return candidates.find((p): p is string => !!p && existsSync(p)) ?? "pdftotext";
 }
 
-export function rankManuals(paths: string[], target?: string, current?: string): string[] {
+export function rankManuals(paths: string[], target?: string, current?: string, profile?: DeviceProfile): string[] {
   const currentKey = current?.trim() ? resolve(expandHome(current)).toLowerCase() : "";
   const key = target ? normalize(target) : "";
   const score = (path: string) => {
     if (currentKey && resolve(path).toLowerCase() === currentKey) return 100;
     const name = normalize(basename(path));
     let value = 0;
+    if (profile?.manualHints.some((hint) => name.includes(normalize(hint)))) value += 80;
+    if (profile && [profile.target, ...profile.aliases].some((alias) => name.includes(normalize(alias)))) value += 45;
     if (key && name.includes(key)) value += 40;
     else if (key.startsWith("mcxc44") && /mcxc?44/.test(name)) value += 30;
     if (/referencemanual|refmanual|refman/.test(name) || /(^|\d)rm($|\d)/.test(name)) value += 25;
@@ -339,15 +401,61 @@ export async function discoverHints(root: string, options: {
   };
 }
 
+function cleanStrings(value: unknown, maximum = 16): string[] | undefined {
+  if (!Array.isArray(value) || value.length > maximum) return;
+  const strings = value.map((item) => typeof item === "string" ? item.trim() : "");
+  return strings.every((item) => item.length > 0 && item.length <= 1024) ? [...new Set(strings)] : undefined;
+}
+
+export function resolveDeviceProfile(selection: DeviceSelection): DeviceProfile {
+  if (selection.profile !== "custom") {
+    const profile = DEVICE_PROFILES[selection.profile];
+    if (!profile) throw new Error(`Unknown device profile: ${String(selection.profile)}. Run /show-reg-config.`);
+    return profile;
+  }
+  const aliases = cleanStrings(selection.aliases);
+  const manualHints = cleanStrings(selection.manualHints);
+  const sourceLinks = cleanStrings(selection.sourceLinks);
+  const evidence = cleanStrings(selection.evidence);
+  const identityRegisters = cleanStrings(selection.identityRegisters);
+  const target = typeof selection.target === "string" ? selection.target.trim() : "";
+  const label = typeof selection.label === "string" ? selection.label.trim() : "";
+  if (!target || target.length > 128 || !label || label.length > 128 || !aliases || !manualHints || !sourceLinks
+    || !evidence?.length || !identityRegisters?.length || !sourceLinks.every((link) => /^https?:\/\//i.test(link))) {
+    throw new Error("Custom device profiles require a label, target, document evidence, identity registers, and valid optional arrays/links.");
+  }
+  return { id: "custom", label, target, aliases, manualHints, sourceLinks, evidence, identityRegisters, status: "custom" };
+}
+
+function migrateLegacyConfig(value: Record<string, unknown>): Config | undefined {
+  if (value.version !== 1) return;
+  const target = typeof value.target === "string" ? canonicalDevice(value.target) : "";
+  if (target !== "MCXC444") {
+    throw new Error("Legacy settings name an unknown device. Run /show-reg-config and add explicit document evidence before lookup.");
+  }
+  return validateConfig({ ...value, version: 2, device: { profile: "mcxc444-cg2271" }, thinking: "auto" });
+}
+
 export function validateConfig(value: unknown): Config {
+  if (!value || typeof value !== "object") throw new Error("Invalid show-reg configuration. Run /show-reg-config to replace it.");
+  const legacy = migrateLegacyConfig(value as Record<string, unknown>);
+  if (legacy) return legacy;
   const c = value as Config;
-  if (!c || c.version !== 1 || ![c.target, c.manual, c.pdftotext, c.model].every(
+  if (c.version !== 2 || ![c.manual, c.pdftotext, c.model].every(
     (v) => typeof v === "string" && v.trim().length > 0 && v.length <= 1024,
-  ) || !["accuracy", "speed", "cost"].includes(c.preference)) {
+  ) || !["accuracy", "speed", "cost"].includes(c.preference)
+    || !["auto", ...THINKING_LEVELS].includes(c.thinking)
+    || !c.device || typeof c.device !== "object") {
     throw new Error("Invalid show-reg configuration. Run /show-reg-config to replace it.");
   }
-  return { version: 1, target: c.target, manual: c.manual, pdftotext: c.pdftotext,
-    model: c.model, preference: c.preference };
+  const profile = resolveDeviceProfile(c.device);
+  const device: DeviceSelection = c.device.profile === "custom"
+    ? { profile: "custom", label: profile.label, target: profile.target, aliases: profile.aliases,
+      manualHints: profile.manualHints, sourceLinks: profile.sourceLinks, evidence: profile.evidence,
+      identityRegisters: profile.identityRegisters }
+    : { profile: c.device.profile };
+  return { version: 2, device, manual: c.manual.trim(), pdftotext: c.pdftotext.trim(),
+    model: c.model.trim(), thinking: c.thinking, preference: c.preference };
 }
 
 export async function readConfig(root: string): Promise<Config | undefined> {
@@ -431,6 +539,26 @@ export function indexManual(text: string): Manual {
   return { pages, registers };
 }
 
+export type ManualIdentity = { profile: string; evidence: string[]; registers: string[] };
+
+export function validateManualForDevice(manual: Manual, selection: DeviceSelection): ManualIdentity {
+  const profile = resolveDeviceProfile(selection);
+  if (profile.status === "preview") {
+    throw new Error(`${profile.label} is a configuration preview; its PDF layout has not passed show-reg parser tests, so no Helper Assistant request was sent.`);
+  }
+  if (!manual.pages.length || !manual.registers.length) throw new Error("The indexed manual is empty or malformed.");
+  const evidence = profile.evidence.filter((needle) => manual.pages.some((page) => normalize(page).includes(normalize(needle))));
+  const available = new Set(manual.registers.map((register) => normalize(register.id)));
+  const registers = profile.identityRegisters.filter((id) => available.has(normalize(id)));
+  const missingEvidence = profile.evidence.filter((item) => !evidence.includes(item));
+  const missingRegisters = profile.identityRegisters.filter((item) => !registers.includes(item));
+  if (missingEvidence.length || missingRegisters.length) {
+    const observed = manual.pages.slice(0, 2).join(" ").replace(/\s+/g, " ").trim().slice(0, 180) || "no readable title text";
+    throw new Error(`Manual/profile mismatch for ${profile.label}. Missing document evidence: ${missingEvidence.join(", ") || "none"}; missing identity registers: ${missingRegisters.join(", ") || "none"}. Observed: ${observed}`);
+  }
+  return { profile: profile.id, evidence, registers };
+}
+
 function distance(a: string, b: string): number {
   let row = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
@@ -455,6 +583,11 @@ export function lookup(registers: Register[], query: string): { exact?: Register
 }
 
 export function sourceExcerpt(manual: Manual, register: Register): string {
+  if (!Number.isInteger(register.page) || !Number.isInteger(register.endPage) || !Number.isInteger(register.line)
+    || register.page < 1 || register.endPage < register.page || register.endPage > manual.pages.length || register.line < 0
+    || (register.endLine !== undefined && (!Number.isInteger(register.endLine) || register.endLine < 0))) {
+    throw new Error("Register source bounds are invalid; delete the project show-reg cache and retry.");
+  }
   if (register.endPage - register.page >= 12) throw new Error("Register section exceeds 12 pages; refusing to send an oversized or incorrectly indexed section.");
   const text = manual.pages.slice(register.page - 1, register.endPage)
     .map((page, i) => `--- PDF page ${register.page + i} ---\n${page.split(/\r?\n/).slice(
@@ -467,17 +600,27 @@ export function sourceExcerpt(manual: Manual, register: Register): string {
 type CachedManual = { version: number; key: string; manual: Manual };
 
 function manualCacheFile(root: string, manualPath: string): string {
-  const id = createHash("sha256").update(resolve(manualPath).toLowerCase()).digest("hex").slice(0, 20);
+  const resolved = resolve(manualPath);
+  const id = createHash("sha256").update(process.platform === "win32" ? resolved.toLowerCase() : resolved).digest("hex").slice(0, 20);
   return join(root, ".pi", "show-reg-cache", `${id}.json.gz`);
 }
 
 function isCachedManual(value: unknown, key: string): value is CachedManual {
   const cached = value as CachedManual;
   return cached?.version === MANUAL_CACHE_VERSION && cached.key === key
-    && Array.isArray(cached.manual?.pages) && cached.manual.pages.every((page) => typeof page === "string")
-    && Array.isArray(cached.manual?.registers) && cached.manual.registers.every((register) =>
-      typeof register?.id === "string" && typeof register?.title === "string"
-      && Number.isInteger(register?.page) && Number.isInteger(register?.endPage));
+    && Array.isArray(cached.manual?.pages) && cached.manual.pages.length > 0 && cached.manual.pages.length <= 5000
+    && cached.manual.pages.every((page) => typeof page === "string")
+    && Array.isArray(cached.manual?.registers) && cached.manual.registers.length > 0 && cached.manual.registers.length <= 100_000
+    && cached.manual.registers.every((register) =>
+      typeof register?.id === "string" && register.id.length > 0 && register.id.length <= 256
+      && typeof register?.title === "string" && register.title.length > 0 && register.title.length <= 1024
+      && typeof register?.section === "string" && register.section.length > 0 && register.section.length <= 64
+      && Number.isInteger(register?.page) && register.page >= 1 && register.page <= cached.manual.pages.length
+      && Number.isInteger(register?.endPage) && register.endPage >= register.page && register.endPage <= cached.manual.pages.length
+      && Number.isInteger(register?.line) && register.line >= 0
+      && register.line < cached.manual.pages[register.page - 1].split(/\r?\n/).length
+      && (register.endLine === undefined || (Number.isInteger(register.endLine) && register.endLine >= 0
+        && register.endLine <= cached.manual.pages[register.endPage - 1].split(/\r?\n/).length)));
 }
 
 async function readManualCache(file: string, key: string): Promise<Manual | undefined> {
@@ -509,15 +652,20 @@ export function createManualLoader(extract = runText) {
     });
     if (!info.isFile()) throw new Error(`Expected a PDF file, not a directory: ${path}`);
     const key = `${MANUAL_CACHE_VERSION}:${path}:${info.size}:${info.mtimeMs}:${config.pdftotext}`;
-    if (cached?.key === key) return cached.value;
+    if (cached?.key === key) {
+      validateManualForDevice(cached.value, config.device);
+      return cached.value;
+    }
     const file = manualCacheFile(root, path);
     const fromDisk = await readManualCache(file, key);
     if (fromDisk) {
+      validateManualForDevice(fromDisk, config.device);
       cached = { key, value: fromDisk };
       return fromDisk;
     }
     const text = await extract(config.pdftotext, ["-layout", "-enc", "UTF-8", path, "-"], signal);
     const value = indexManual(text);
+    validateManualForDevice(value, config.device);
     cached = { key, value };
     await writeManualCache(file, key, value).catch(() => { /* a cache failure must not fail the lookup */ });
     return value;

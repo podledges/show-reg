@@ -1,7 +1,7 @@
 # show-reg
 > Embedded Programming
 
-Pi extension for looking up MCU registers in a local or online (to be implemented) reference, for which the user sets. <br> LLM engine and model is also kept user defined, so that you have the control!
+Lightweight Pi skill + TypeScript extension for exact, source-grounded MCU register lookup from a local reference manual. The first validated profile targets the MCXC444 material used by CG2271 Labs.
 
 ## Install
 
@@ -18,16 +18,17 @@ pi install git:github.com/podledges/show-reg
 /show-reg cancel
 ```
 
-On the first lookup, show-reg scans the project for a target and reference manual and offers one detected setup to confirm. Use `/show-reg-config` when you want to choose the target, PDF, existing `pdftotext` executable, model and preference yourself. Absolute and project-relative PDF paths work, including quoted Windows paths. Nothing is downloaded automatically.
+On the first lookup, show-reg scans the project and offers a complete recommendation to accept once. It shows the device, manual identity evidence, extractor, Helper Assistant model, thinking level, preference, and source links before saving. `/show-reg-config` offers the same one-confirm path, followed by field-by-field review when declined. Absolute and project-relative PDF paths work, including quoted Windows paths. Nothing is downloaded automatically.
 
 Settings live in `.pi/show-reg.json` in the working project's Git root, or the current directory outside a Git repository. Keep that file out of version control. No credentials are saved in it. Existing `.pi/show-me.json` settings are still read until new settings are saved.
 
-The extension searches the PDF locally, then sends only the matching register pages to the selected model. It returns a bit table, field meanings, binary encodings and citations. Typos or ambiguous names get suggestions before a model is called. A bare `/show-reg` prompts for a register. After the first index, register completions are available in the command line.
+The extension searches the PDF locally, then sends only the exact bounded register section to the selected Helper Assistant. It returns a bit table, field meanings, binary encodings and citations. Typos, ambiguous names, device/manual mismatches, and unsupported thinking levels stop before a provider call. A bare `/show-reg` prompts for a register. After the first index, register completions are available in the command line.
 
-The bundled skill also lets the active chat model recognize natural-language register questions and call the `show_register` tool. The TypeScript extension still performs the exact match, source isolation and specialist-model request, so a weaker chat model does not have to reconstruct those steps.
+The bundled skill lets the active chat model recognize natural-language register questions and call `show_register`. For setup questions it calls `show_register_setup`, which prints the same locally validated recommendation without saving settings or calling a provider. The TypeScript extension performs exact matching, source isolation, and the specialist request, so a weaker chat model does not have to navigate files or reconstruct those steps.
 
 Parsed manual text is compressed under `.pi/show-reg-cache/`. The cache is project-local, ignored by Git, and invalidates automatically when the PDF, extractor or parser changes. It avoids rerunning `pdftotext` after Pi restarts.
 
+<<<<<<< HEAD
 ## Turn keyword gate
 
 Normal agent prompts get show-reg guidance only when their text contains the explicit, case-insensitive name `show-reg` or `show-reg-config`, optionally prefixed with `/`. The complete name, including any leading `/`, must not be adjacent to ASCII letters, digits, `_`, `/`, or `-`; near misses such as `show-registry`, `/show-reg-extra`, `show-reg/core.ts`, `show-reg-config/example`, and `PERIPH->REG` do not activate the gate.
@@ -37,8 +38,15 @@ A miss returns no hook result. A hit preserves Pi's current chained system promp
 This behavior is implemented by the extension itself, not a skill, so installing show-reg does not add an entry to Pi's Skills list.
 
 `current` uses your active model. `automatic` estimates text cost from positive registry prices when you choose cost; otherwise it uses the current model. It does not benchmark quality or speed. The main chat model is not changed.
+=======
+`current` uses your active model as the separate Helper Assistant request. `automatic` estimates text cost from positive registry prices when you choose cost; otherwise it uses the current model. The Helper Assistant thinking level is independently configurable and checked against Pi's model capability metadata before every request. The main chat model and its thinking setting are not changed. The footer reports the requested level, never hidden chain-of-thought.
+>>>>>>> 339c927 (Add device-safe setup and configurable helper assistant)
 
-Requires Pi 0.85.1+ and `pdftotext`. Optional `pdftoppm` supplies page images to image-capable models. The parser is tested against the MCX-C44X reference manual; other PDF layouts may need parser changes. Scanned PDFs need OCR first.
+The built-in `mcxc444-cg2271` profile requires the NXP MCX C44X document title, document number, supported-device marker, and representative registers on every cache path. The `esp32-s3-wroom-1` profile includes official Espressif source metadata but is intentionally preview-only until its PDF layout has fixtures. ESP DEVKIT 1 is not treated as an alias for that module.
+
+Custom devices use a version-2 project config with required document text and identity registers; see [examples/show-reg.custom.json](examples/show-reg.custom.json). Links are metadata in this release—a local PDF remains required, and configuring a custom profile does not guarantee that its layout matches the current parser.
+
+Requires Pi 0.85.1+ and `pdftotext`. Optional `pdftoppm` supplies full boundary-page images to image-capable models; exact text remains section-bounded. Windows is tested. macOS and Linux/WSL use native paths but are not yet exercised here; WSL paths should use `/mnt/c/...`. Scanned PDFs need OCR first.
 
 [Commands and setup](extensions/show-reg/index.ts) · [PDF search](extensions/show-reg/core.ts) · [Usability specification and roadmap](docs/planning/show-reg-usability-spec.md)
 
@@ -50,4 +58,10 @@ With Node.js 22.19+:
 npm test
 ```
 
-For optional real-manual tests, set `SHOW_REG_TEST_MANUAL` to the MCX-C44X reference PDF's absolute path. Set `PI_PACKAGE_PATH` to the installed Pi package directory if it is not detected. Tests do not call a model provider. No datasheets are bundled.
+For real-manual tests, set `SHOW_REG_TEST_MANUAL` to the MCX-C44X reference PDF's absolute path. Set `PI_PACKAGE_PATH` to the installed Pi package directory if it is not detected. Tests use mock providers and do not call a live model. No datasheets are bundled.
+
+Measure a cold extraction and five fresh-loader disk-cache reads with:
+
+```sh
+npm run benchmark:cache
+```

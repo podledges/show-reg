@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "device": {
+    "profile": "custom",
+    "label": "My MCU",
+    "target": "MY_MCU_1",
+    "aliases": ["MY-BOARD-1"],
+    "manualHints": ["my-mcu-reference-manual.pdf"],
+    "sourceLinks": ["https://vendor.example/my-mcu/reference-manual"],
+    "evidence": ["My MCU Reference Manual", "Document ID MYMCU1RM"],
+    "identityRegisters": ["CLOCK_CTRL", "GPIO_OUT"]
+  },
+  "manual": "docs/my-mcu-reference-manual.pdf",
+  "pdftotext": "pdftotext",
+  "model": "current",
+  "thinking": "medium",
+  "preference": "accuracy"
+}
