@@ -1,12 +1,9 @@
 import { Type, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { type Config, type DeviceProfile, type DeviceSelection, type HelperThinking, type Hint, type ManualIdentity, type Register, DEFAULT_MANUAL, OUTPUT_RULES, THINKING_LEVELS, cleanFilePath, createManualLoader, defaultPdfToText, discoverHints, discoverManuals, expandHome, listBrowsable, lookup, normalizeFieldBreaks, profileForTarget, rankManuals, readConfig, renderPage, resolveDeviceProfile, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
+import { type Config, type DeviceProfile, type DeviceSelection, type HelperThinking, type Hint, type ManualIdentity, type Register, DEFAULT_MANUAL, OUTPUT_RULES, THINKING_LEVELS, cleanFilePath, createManualLoader, defaultPdfToText, discoverHints, discoverManuals, expandHome, listBrowsable, lookup, normalizeFieldBreaks, profileForTarget, rankManuals, readConfig, resolveDeviceProfile, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
 
 function projectRoot(cwd: string): string {
   let root = resolve(cwd);
@@ -24,11 +21,11 @@ function availableModels(ctx: ExtensionContext) {
   )) : available;
 }
 
-function pdfLabel(path: string, all: string[], current?: string): string {
+function pdfLabel(root: string, path: string, all: string[], current?: string): string {
   const name = basename(path);
   const clash = all.filter((p) => basename(p).toLowerCase() === name.toLowerCase()).length > 1;
   const label = clash ? `${name} — ${dirname(path)}` : name;
-  return current && resolve(expandHome(current)) === resolve(path) ? `${label} (current)` : label;
+  return current && resolve(root, expandHome(current)) === resolve(path) ? `${label} (current)` : label;
 }
 
 async function browsePdfs(ctx: ExtensionCommandContext, root: string, start: string): Promise<string | undefined> {
@@ -73,21 +70,21 @@ async function pickHint(ctx: ExtensionCommandContext, title: string, hints: Hint
 }
 
 async function pickManual(ctx: ExtensionCommandContext, root: string, current?: string, extra: string[] = [], profile?: DeviceProfile): Promise<string | undefined> {
-  const discovered = rankManuals(await discoverManuals(root, current, extra), profile?.target, current, profile);
-  const labels = discovered.map((p) => pdfLabel(p, discovered, current));
+  const discovered = rankManuals(await discoverManuals(root, current, extra), profile?.target, current, profile, root);
+  const labels = discovered.map((p) => pdfLabel(root, p, discovered, current));
   const choice = await ctx.ui.select("Datasheet / reference manual PDF", [
     ...labels, "Browse another folder…", "Enter a filepath…",
   ]);
   if (!choice) return;
   if (choice === "Enter a filepath…") {
     const typed = await ctx.ui.input("PDF filepath (absolute, ~/\u2026, or relative to repository root)",
-      current ?? join(homedir(), "Documents", "CG2271-Labs", "datasheets"));
+      current ?? join(root, "datasheets"));
     return typed === undefined ? undefined : storeManualPath(root, typed);
   }
   if (choice === "Browse another folder…") {
     const fromCurrent = current ? dirname(resolve(root, expandHome(current))) : "";
-    const lab = join(homedir(), "Documents", "CG2271-Labs", "datasheets");
-    const start = existsSync(fromCurrent) ? fromCurrent : existsSync(lab) ? lab : homedir();
+    const local = join(root, "datasheets");
+    const start = existsSync(fromCurrent) ? fromCurrent : existsSync(local) ? local : root;
     const folder = await ctx.ui.input("Folder to browse", start);
     return folder === undefined ? undefined : browsePdfs(ctx, root, folder);
   }
@@ -103,9 +100,9 @@ export default function showReg(pi: ExtensionAPI) {
     const systemPrompt = showRegSystemPrompt(event.prompt, event.systemPrompt);
     return systemPrompt === undefined ? undefined : { systemPrompt };
   });
-  pi.registerMessageRenderer("show-reg", (message) => new Markdown(String(message.content), 0, 0, getMarkdownTheme()));
-  const show = (text: string, model?: string) => pi.sendMessage({ customType: "show-reg", display: true,
-    content: `${text}\n\n— ${model ?? "show-reg (local lookup; no model called)"}` }, { triggerTurn: false });
+  // Notifications are display-only. sendMessage would enter subsequent provider context.
+  const show = (ctx: ExtensionContext, text: string, model?: string) => ctx.ui.notify(
+    `${text}\n\n- ${model ?? "show-reg (local lookup; no model called)"}`, "info");
 
   const recommend = async (root: string, ctx: ExtensionContext, old?: Config, allowEnv = false, signal?: AbortSignal): Promise<Recommendation> => {
     const models = availableModels(ctx);
@@ -123,7 +120,7 @@ export default function showReg(pi: ExtensionAPI) {
         : "I could not confidently identify a validated device profile. Run /show-reg-config.");
     }
     const manuals = rankManuals(await discoverManuals(root, old?.manual, hints.manuals.map((hint) => hint.value)),
-      profile.target, old?.manual, profile);
+      profile.target, old?.manual, profile, root);
     const manual = manuals[0];
     if (!manual) throw new Error("I could not find a local reference-manual PDF. Run /show-reg-config.");
     const pdftotext = old?.pdftotext ?? hints.pdftotext[0]?.value ?? defaultPdfToText();
@@ -142,7 +139,7 @@ export default function showReg(pi: ExtensionAPI) {
     try {
       const proposed = await recommend(root, ctx);
       const accepted = await ctx.ui.confirm("Use this validated show-reg setup?",
-        `${recommendationText(proposed)}\n\nThe PDF stays local; only the exact matched register section is sent. Choose No to review fields with /show-reg-config.`);
+        `${recommendationText(proposed)}\n\nOrdinary lookup stays local. Only /show-reg explain sends the bounded matched register text online. Choose No to review fields with /show-reg-config.`);
       if (!accepted) throw new Error("Setup was not saved. Run /show-reg-config to choose each setting.");
       await saveConfig(root, proposed.config);
       completionRegisters = (await loadManual(root, proposed.config)).registers;
@@ -151,7 +148,7 @@ export default function showReg(pi: ExtensionAPI) {
     } finally { ctx.ui.setStatus("show-reg", undefined); }
   };
 
-  const performLookup = async (rawQuery: string, ctx: ExtensionContext, signal: AbortSignal): Promise<{ text: string; model?: string }> => {
+  const performLookup = async (rawQuery: string, ctx: ExtensionContext, signal: AbortSignal, explain = false): Promise<{ text: string; model?: string }> => {
     const root = projectRoot(ctx.cwd);
     const config = await readConfig(root) ?? await quickConfig(root, ctx);
     const query = rawQuery.trim();
@@ -168,6 +165,7 @@ export default function showReg(pi: ExtensionAPI) {
         : " No plausible indexed candidates found; the manual may use another identifier."}` };
     }
     const excerpt = sourceExcerpt(manual, result.exact);
+    if (!explain) return { text: `Local source: \`${config.manual}\`, section ${result.exact.section}, PDF pages ${result.exact.page}-${result.exact.endPage}.\n\n${excerpt}` };
     const models = availableModels(ctx);
     let model = models.find((candidate) => `${candidate.provider}/${candidate.id}` === config.model);
     if (config.model === "current" || config.model === "automatic") {
@@ -183,27 +181,14 @@ export default function showReg(pi: ExtensionAPI) {
     if (!model) throw new Error("Configured Helper Assistant model is unavailable, outside the session scope, or has no usable price estimate. Run /show-reg-config; no substitute was called.");
     if (model.contextWindow < Math.ceil(excerpt.length / 4) + 8192) throw new Error("Selected model's context limit is too small for this section. Choose another model in /show-reg-config.");
     const thinking = helperThinking(model, config.thinking);
-    const images: { type: "image"; data: string; mimeType: string }[] = [];
-    if (model.input.includes("image")) {
-      try {
-        for (let page = result.exact.page; page <= result.exact.endPage; page++) {
-          images.push({ type: "image", data: await renderPage(resolve(root, expandHome(config.manual)), page, signal), mimeType: "image/png" });
-        }
-      } catch {
-        if (signal.aborted) throw new Error("Cancelled.");
-        images.length = 0;
-      }
-    }
-    const sourceMode = images.length ? "Text and page images, in PDF page order; verify table alignment against images."
-      : "Text only; page images unavailable. Explicitly flag any ambiguous diagram or field alignment.";
-    if (!images.length) ctx.ui.notify("Using extracted text only; page images are unavailable for this tool/model.", "warning");
+    const sourceMode = "Bounded register text only; explicitly flag any ambiguous diagram or field alignment.";
     const attempted = `Helper Assistant ${modelId(model)} · thinking ${thinking} (request attempted)`;
     ctx.ui.setStatus("show-reg", `${result.exact.id} → ${attempted}`);
     ctx.ui.notify(`Reading PDF pages ${result.exact.page}–${result.exact.endPage} with ${attempted}`, "info");
     const response = await completeHelper(ctx, model, {
       systemPrompt: OUTPUT_RULES,
       messages: [{ role: "user", timestamp: Date.now(), content: [{ type: "text", text:
-        JSON.stringify({ target: profile.target, deviceProfile: profile.id, query, register: result.exact, document: config.manual, sourceMode, source: excerpt }) }, ...images] }],
+        JSON.stringify({ target: profile.target, deviceProfile: profile.id, query, register: result.exact, document: basename(config.manual.replaceAll("\\", "/")), sourceMode, source: excerpt }) }] }],
     }, thinking, signal);
     if (response.stopReason === "error" || response.stopReason === "aborted") throw new Error("Model request failed or was cancelled. Check Pi provider status and retry; no fallback model was called.");
     if (response.stopReason === "length") throw new Error("Model response was truncated; no incomplete register breakdown was displayed. Try a model with a larger output limit.");
@@ -220,7 +205,7 @@ export default function showReg(pi: ExtensionAPI) {
         let old: Config | undefined;
         try { old = await readConfig(root); } catch { ctx.ui.notify("Existing settings are invalid; configuration will replace them.", "warning"); }
         if (args.trim() === "show") {
-          show(old ? `Saved in .pi/show-reg.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. Run /show-reg-config.");
+          show(ctx, old ? `Saved in .pi/show-reg.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. Run /show-reg-config.");
           return;
         }
         if (args.trim()) throw new Error("Use /show-reg-config or /show-reg-config show.");
@@ -233,7 +218,7 @@ export default function showReg(pi: ExtensionAPI) {
           ctx.ui.setStatus("show-reg", undefined);
           if (await ctx.ui.confirm("Accept all recommended settings?", `${recommendationText(proposed)}\n\nChoose No to review every field. Nothing is saved unless you confirm.`)) {
             await saveConfig(root, proposed.config);
-            show("Saved the validated recommendation in `.pi/show-reg.json`. Try `/show-reg MCG->C1`.");
+            show(ctx, "Saved the validated recommendation in `.pi/show-reg.json`. Try `/show-reg MCG->C1`.");
             return;
           }
         } catch (error) {
@@ -327,15 +312,15 @@ export default function showReg(pi: ExtensionAPI) {
         const summary: Recommendation = { config, profile, identity, count, model: selectionModel, thinking };
         if (!await ctx.ui.confirm("Save these show-reg settings?", `${recommendationText(summary)}\n\n${profile.status === "preview" ? "Preview profiles cannot dispatch lookups. " : ""}Automatic selection is a price heuristic, not a quality or speed benchmark.`)) return;
         await saveConfig(root, config);
-        show(`Saved personal settings in `.pi/show-reg.json`. Keep this file out of Git.${profile.status === "preview" ? " This preview cannot run lookups yet." : " Try `/show-reg MCG->C1`."}`);
-      } catch (error) { show(`Configuration failed: ${error instanceof Error ? error.message : "Unknown error"}`); }
+        show(ctx, `Saved personal settings in \`.pi/show-reg.json\`. Keep this file out of Git.${profile.status === "preview" ? " This preview cannot run lookups yet." : " Try `/show-reg MCG->C1`."}`);
+      } catch (error) { show(ctx, `Configuration failed: ${error instanceof Error ? error.message : "Unknown error"}`); }
     },
   });
 
   pi.registerTool({
     name: "show_register",
     label: "Show register",
-    description: "Look up one MCU hardware register in the project's configured reference manual. Return the complete source-grounded bit table, every documented field encoding, constraints and citations; use the exact peripheral/register identifier when known.",
+    description: "Look up one MCU hardware register in the project's configured reference manual. Display bounded local source to the user, not the model. Return only status; online explanation requires the user's /show-reg explain command; use the exact peripheral/register identifier when known.",
     promptSnippet: "Look up an MCU register in the project's local reference manual",
     parameters: Type.Object({ register: Type.String({ minLength: 1, maxLength: 200,
       description: "Register identifier or official title, for example MCG_C1 or MCG->C1" }) }),
@@ -348,11 +333,11 @@ export default function showReg(pi: ExtensionAPI) {
       const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
       try {
         const result = await performLookup(params.register, ctx, combined);
-        return { content: [{ type: "text", text: `${result.text}\n\n— ${result.model ?? "show-reg (local lookup; no model called)"}` }],
-          details: { model: result.model } };
+        show(ctx, result.text);
+        return { content: [{ type: "text", text: "Local lookup displayed to the user; source excluded from model context." }], details: {} };
       } catch (error) {
-        return { content: [{ type: "text", text: combined.aborted ? "Lookup cancelled or timed out."
-          : `Lookup failed: ${error instanceof Error ? error.message : "Unknown error"}` }], details: {}, isError: true };
+        show(ctx, combined.aborted ? "Lookup cancelled or timed out." : `Lookup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+        return { content: [{ type: "text", text: "Local lookup failed; details displayed to the user." }], details: {} };
       } finally {
         clearTimeout(timeout);
         running = undefined;
@@ -374,19 +359,20 @@ export default function showReg(pi: ExtensionAPI) {
         const old = await readConfig(root);
         const proposed = await recommend(root, ctx, old, false, signal);
         if (signal?.aborted) throw new Error("Cancelled.");
-        return { content: [{ type: "text", text: `Validated recommended answers:\n\n${recommendationText(proposed)}\n\nRun /show-reg-config to accept once or review each field. No settings were saved and no Helper Assistant model was called.` }],
-          details: { profile: proposed.profile.id, manual: proposed.config.manual, model: modelId(proposed.model), thinking: proposed.thinking } };
+        show(ctx, `Validated recommended answers:\n\n${recommendationText(proposed)}\n\nRun /show-reg-config to accept once or review each field. No settings were saved and no Helper Assistant model was called.`);
+        return { content: [{ type: "text", text: "Setup inspected locally; settings displayed to the user, excluded from model context." }], details: {} };
       } catch (error) {
-        return { content: [{ type: "text", text: `Setup inspection failed: ${error instanceof Error ? error.message : "Unknown error"}` }], details: {}, isError: true };
+        show(ctx, `Setup inspection failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+        return { content: [{ type: "text", text: "Local setup inspection failed; details displayed to the user." }], details: {} };
       }
     },
   });
 
   pi.registerCommand("show-reg", {
-    description: "Show a register: /show-reg MCG->C1 · /show-reg show · /show-reg cancel",
+    description: "Display local source: /show-reg MCG->C1; online explanation: /show-reg explain MCG->C1; show settings or cancel",
     getArgumentCompletions: (prefix) => {
       const key = prefix.trim().toLowerCase();
-      const actions = ["show", "cancel"].filter((value) => value.startsWith(key))
+      const actions = ["show", "explain", "cancel"].filter((value) => value.startsWith(key))
         .map((value) => ({ value, label: value }));
       const registers = completionRegisters.filter((register) => register.id.toLowerCase().includes(key)
         || register.title.toLowerCase().includes(key)).slice(0, 20)
@@ -402,14 +388,15 @@ export default function showReg(pi: ExtensionAPI) {
       if (args.trim() === "show") {
         const root = projectRoot(ctx.cwd);
         let old: Config | undefined;
-        try { old = await readConfig(root); } catch { show("Saved settings are invalid. Run /show-reg-config to replace them."); return; }
-        show(old ? `Saved in .pi/show-reg.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. The next lookup can auto-detect a setup, or run /show-reg-config.");
+        try { old = await readConfig(root); } catch { show(ctx, "Saved settings are invalid. Run /show-reg-config to replace them."); return; }
+        show(ctx, old ? `Saved in .pi/show-reg.json:\n\n\`\`\`json\n${JSON.stringify(old, null, 2)}\n\`\`\`` : "Not configured. The next lookup can auto-detect a setup, or run /show-reg-config.");
         return;
       }
       if (running) { ctx.ui.notify("A lookup is running. Use /show-reg cancel first.", "warning"); return; }
-      let query = args.trim();
+      const explain = /^explain(?:\s+|$)/i.test(args.trim());
+      let query = explain ? args.trim().replace(/^explain\s*/i, "") : args.trim();
       if (!query) {
-        if (!ctx.hasUI) { show("Lookup failed: Provide a register: /show-reg <register>."); return; }
+        if (!ctx.hasUI) { show(ctx, "Lookup failed: Provide a register: /show-reg <register>."); return; }
         query = (await ctx.ui.input("Register identifier or manual title"))?.trim() ?? "";
         if (!query) return;
       }
@@ -417,10 +404,10 @@ export default function showReg(pi: ExtensionAPI) {
       const controller = running;
       const timeout = setTimeout(() => controller.abort(), 180_000);
       try {
-        const result = await performLookup(query, ctx, controller.signal);
-        show(result.text, result.model);
+        const result = await performLookup(query, ctx, controller.signal, explain);
+        show(ctx, result.text, result.model);
       } catch (error) {
-        show(controller.signal.aborted ? "Lookup cancelled or timed out."
+        show(ctx, controller.signal.aborted ? "Lookup cancelled or timed out."
           : `Lookup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
       } finally {
         clearTimeout(timeout);
@@ -456,17 +443,9 @@ function resolvedModel(models: any[], current: any, configured: string): any | u
 }
 
 async function completeHelper(ctx: ExtensionContext, model: any, context: any, thinking: Exclude<HelperThinking, "auto">, signal: AbortSignal) {
-  const registry = ctx.modelRegistry;
-  const provider = registry.getProvider(model.provider);
-  if (!provider) throw new Error(`Helper Assistant provider is unavailable: ${model.provider}.`);
-  const auth = await registry.getApiKeyAndHeaders(model);
-  if (!auth.ok) throw new Error(`Helper Assistant authentication failed: ${auth.error}`);
-  const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
-  return provider.streamSimple(requestModel, context, {
+  // The registry applies request-time auth and normalizes context for installed Pi providers.
+  return ctx.modelRegistry.streamSimple(model, context, {
     signal,
-    apiKey: auth.apiKey,
-    headers: auth.headers,
-    env: auth.env,
     reasoning: thinking === "off" ? undefined : thinking,
     maxTokens: Math.min(8192, model.maxTokens),
     cacheRetention: "none",
