@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, matchesShowRegTrigger, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
+import { gzipSync, gunzipSync } from "node:zlib";
+import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, matchesShowRegTrigger, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, resolveDeviceProfile, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
+const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
 const fixtureConfig: Config = { ...config, device: { profile: "custom", label: "Synthetic MCU", target: "SYNTH1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Synthetic Manual"], identityRegisters: ["MCG_C1"] } };
 test("turn gate matches only explicit show-reg names", () => {
   for (const prompt of [
@@ -103,6 +104,7 @@ test("PDF discovery expands ~ and lists manuals from datasheets folders", async 
     assert.equal(pdfs.length, 1);
     assert.equal(basename(pdfs[0]), "chip.pdf");
     assert.equal(storeManualPath(directory, pdfs[0]), join("datasheets", "chip.pdf"));
+    assert.equal(storeManualPath(directory, "datasheets/chip.pdf"), join("datasheets", "chip.pdf"));
     const found = await discoverManuals(directory);
     assert.ok(found.some((p) => p.startsWith(directory) && basename(p) === "chip.pdf"));
     await mkdir(join(directory, "docs"));
@@ -112,7 +114,19 @@ test("PDF discovery expands ~ and lists manuals from datasheets folders", async 
     const broader = await discoverManuals(directory);
     assert.ok(broader.some((p) => basename(p) === "MCX-C44X-RM.pdf"));
     assert.ok(!broader.some((p) => p.toLowerCase().includes("node_modules")));
-    assert.ok(defaultManualFolders(directory).some((p) => /CG2271-Labs[/\\]datasheets$/i.test(p)));
+    assert.ok(defaultManualFolders(directory).every((p) => p.startsWith(directory)));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("saved project-relative manual beats production profile filename scores", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "show-reg-priority-"));
+  try {
+    await mkdir(join(directory, "datasheets"));
+    const current = "datasheets/chosen.pdf";
+    await writeFile(join(directory, current), "%PDF");
+    await writeFile(join(directory, "datasheets/MCX-C44X-Sub-Family-Reference-Manual.pdf"), "%PDF");
+    const files = await discoverManuals(directory, current);
+    assert.equal(rankManuals(files, "MCXC444", current, resolveDeviceProfile({ profile: "mcxc444-cg2271" }), directory)[0], join(directory, current));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -195,6 +209,13 @@ test("manual cache survives extension reload and invalidates with the PDF", asyn
     await utimes(pdf, future, future);
     await createManualLoader(extract)(directory, local);
     assert.equal(extractions, 3);
+    const cacheFile = join(directory, ".pi", "show-reg-cache", files[0]);
+    const cache = JSON.parse(gunzipSync(await readFile(cacheFile)).toString());
+    assert.equal(cache.version, 3);
+    // Even otherwise matching v2 cache data must be reindexed after the caption fix.
+    await writeFile(cacheFile, gzipSync(JSON.stringify({ ...cache, version: 2 })));
+    await createManualLoader(extract)(directory, local);
+    assert.equal(extractions, 4);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -224,6 +245,8 @@ test("index excludes TOC and parent headings, retains continuation before next r
   assert.match(excerpt, /IREFSTEN/);
   assert.doesNotMatch(excerpt, /IRCS clock selection|MCG_C2/);
   assert.equal(lookup(manual.registers, "MCG Control Register 1").exact?.id, "MCG_C1");
+  const caption = indexManual("9.3.1 Synthetic Control Register\n  Table 9-3. Invented assignments\n  Bit Name\n  0 Enable");
+  assert.equal(lookup(caption.registers, "Synthetic Control Register").exact?.page, 1);
 });
 
 test("ambiguous abbreviations and typos never silently resolve", () => {
@@ -275,23 +298,6 @@ test("process arguments are literal, not shell input", async () => {
   await assert.rejects(pending, /extraction failed/);
 });
 
-test("real manual: different peripherals, title aliases and bounded source", async (t) => {
-  if (!process.env.SHOW_REG_TEST_MANUAL) { t.skip("Set SHOW_REG_TEST_MANUAL to the MCX-C44X reference PDF for this optional integration test."); return; }
-  const manual = await createManualLoader()(root, config);
-  const identity = validateManualForDevice(manual, config.device);
-  assert.deepEqual(identity.evidence, ["MCX C44X Sub-Family Reference Manual", "MCXC44XP64M48RM", "MCXC4x4(R)"]);
-  assert.ok(identity.registers.includes("TPMx_SC"));
-  for (const [query, page] of [["MCG->C1", 451], ["MCG_C2", 452], ["SIM_SCGC5", 172], ["PORTx_PCRn", 149], ["UARTx_C2", 701], ["MDM-AP Control Register", 111]] as const) {
-    const result = lookup(manual.registers, query);
-    assert.equal(result.exact?.page, page, query);
-    const source = sourceExcerpt(manual, result.exact!);
-    assert.ok(source.length < 60_000, query);
-    assert.match(source, /PDF page/);
-  }
-  const c1 = lookup(manual.registers, "MCG->C1").exact!;
-  assert.doesNotMatch(sourceExcerpt(manual, c1), /MCG_C2/);
-});
-
 function piPackage(): string | undefined {
   if (process.env.PI_PACKAGE_PATH) return process.env.PI_PACKAGE_PATH;
   try { return dirname(dirname(createRequire(import.meta.url).resolve("@earendil-works/pi-coding-agent"))); } catch {}
@@ -299,9 +305,9 @@ function piPackage(): string | undefined {
   return global && existsSync(global) ? global : undefined;
 }
 
-test("Pi extension loads; mocks verify no-call failures, isolated request and identity", async (t) => {
+test("Pi extension loads and preserves the turn gate", async () => {
   const packagePath = piPackage();
-  if (!packagePath) { t.skip("Set PI_PACKAGE_PATH to the installed Pi package to test its loader."); return; }
+  assert.ok(packagePath, "Set PI_PACKAGE_PATH to the installed Pi package; loader coverage is required.");
   const { loadExtensions } = await import(pathToFileURL(join(packagePath, "dist/core/extensions/loader.js")).href);
   const loaded = await loadExtensions([join(root, "extensions/show-reg/index.ts")], root);
   assert.deepEqual(loaded.errors, []);
@@ -321,93 +327,5 @@ test("Pi extension loads; mocks verify no-call failures, isolated request and id
     systemPrompt: basePrompt, systemPromptOptions: { cwd: root } }, {} as any);
   assert.deepEqual(hit, { systemPrompt: `${basePrompt}\n\n${TURN_INSTRUCTIONS}` });
   assert.doesNotMatch(hit!.systemPrompt!, /Explain the requested MCU register using ONLY/);
-  if (!process.env.SHOW_REG_TEST_MANUAL) { t.diagnostic("Pi command loading passed; set SHOW_REG_TEST_MANUAL to also exercise real-PDF model mocks."); return; }
-  const directory = await mkdtemp(join(tmpdir(), "show-reg-command-"));
-  const messages: any[] = [];
-  // Runtime message injection is replaced; no provider or active Pi session is used.
-  loaded.runtime.sendMessage = (message: unknown) => messages.push(message);
-  let calls = 0;
-  const model = { provider: "test", id: "chosen", input: ["text"], reasoning: true, contextWindow: 128000, maxTokens: 8192, cost: { input: 1, output: 1 } };
-  let responseFactory: (chosen: unknown, context: any, options: any) => any = async (chosen, context, options) => {
-    calls++;
-    assert.equal(chosen, model);
-    assert.equal(options.reasoning, "medium");
-    assert.equal(options.apiKey, "test-key");
-    assert.equal(options.headers["x-test"], "yes");
-    assert.equal(options.cacheRetention, "none");
-    assert.equal(context.messages.length, 1);
-    assert.equal(context.tools, undefined);
-    assert.ok(context.messages[0].content[0].text.length < 10000);
-    assert.match(context.messages[0].content[0].text, /MCG_C1/);
-    assert.doesNotMatch(context.messages[0].content[0].text, /MCG_C2/);
-    return { stopReason: "stop", provider: "test", model: "reported-model", content: [{ type: "text", text: "Register answer" }] };
-  };
-  const provider = { streamSimple(chosen: unknown, context: any, options: any) {
-    return { result: () => responseFactory(chosen, context, options) };
-  } };
-  const ctx: any = { cwd: directory, scopedModels: [], model, hasUI: true,
-    ui: { setStatus() {}, notify() {}, confirm: async () => true, select: async () => undefined, input: async () => undefined },
-    modelRegistry: { getAvailable: () => [model], getProvider: () => provider,
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: { "x-test": "yes" } }) } };
-  try {
-    // Locate repository via a minimal temporary root without copying the manual.
-    await writeFile(join(directory, "AGENTS.md"), "Test root");
-    const { mkdir } = await import("node:fs/promises");
-    await mkdir(join(directory, "datasheets"));
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.equal((await readConfig(directory))?.device.profile, "mcxc444-cg2271");
-    assert.match(messages.at(-1).content, /Helper Assistant test\/reported-model · thinking medium/);
-    assert.equal(calls, 1);
-    await commands.get("show-reg").handler("MCG_C9", ctx);
-    assert.match(messages.at(-1).content, /Did you mean/);
-    assert.equal(calls, 1);
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.equal(calls, 2);
-    assert.match(messages.at(-1).content, /Helper Assistant test\/reported-model/);
-    assert.ok(commands.get("show-reg").getArgumentCompletions("MCG_C").some((item: any) => item.value === "MCG_C1"));
-    const toolResult = await tools.get("show_register").definition.execute("test-call", { register: "MCG_C1" }, undefined, undefined, ctx);
-    assert.equal(calls, 3);
-    assert.match(toolResult.content[0].text, /Register answer/);
-    assert.match(toolResult.content[0].text, /Helper Assistant test\/reported-model/);
-    const setupResult = await tools.get("show_register_setup").definition.execute("setup-call", {}, undefined, undefined, ctx);
-    assert.match(setupResult.content[0].text, /Validated recommended answers/);
-    assert.equal(calls, 3);
-    await saveConfig(directory, { ...config, manual: resolve(root, config.manual), device: { profile: "custom", label: "Wrong manual", target: "WRONG1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Definitely not this document"], identityRegisters: ["MCG_C1"] } });
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.match(messages.at(-1).content, /Manual\/profile mismatch/);
-    assert.equal(calls, 3);
-    await saveConfig(directory, { ...config, manual: resolve(root, config.manual), thinking: "max" });
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.match(messages.at(-1).content, /does not support Helper Assistant thinking=max/);
-    assert.equal(calls, 3);
-    await saveConfig(directory, { ...config, manual: resolve(root, config.manual), model: "missing/model" });
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.match(messages.at(-1).content, /unavailable/);
-    assert.equal(calls, 3);
-    // Cancelled setup must not overwrite existing preferences.
-    ctx.ui.input = async () => undefined;
-    await commands.get("show-reg-config").handler("", ctx);
-    assert.equal((await readConfig(directory))?.model, "missing/model");
-    await saveConfig(directory, { ...config, manual: resolve(root, config.manual) });
-    ctx.scopedModels = [{ model: { provider: "other", id: "scoped" } }];
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.match(messages.at(-1).content, /unavailable/);
-    assert.equal(calls, 3);
-    ctx.scopedModels = [];
-    responseFactory = async () => ({ stopReason: "length", content: [{ type: "text", text: "Incomplete answer" }] });
-    await commands.get("show-reg").handler("MCG_C1", ctx);
-    assert.match(messages.at(-1).content, /truncated/);
-    assert.doesNotMatch(messages.at(-1).content, /Incomplete answer/);
-    let requestStarted!: () => void;
-    const started = new Promise<void>((done) => { requestStarted = done; });
-    responseFactory = async (_model: unknown, _context: unknown, options: any) => {
-      requestStarted();
-      return new Promise((_accept, reject) => options.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
-    };
-    const pending = commands.get("show-reg").handler("MCG_C1", ctx);
-    await started;
-    await commands.get("show-reg").handler("cancel", ctx);
-    await pending;
-    assert.match(messages.at(-1).content, /cancelled/);
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  // Command/tool payloads use mandatory synthetic-PDF coverage in privacy.test.ts.
 });

@@ -2,7 +2,7 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
-- Run the full test suite with `npm test`; tests load the extension against Pi when `PI_PACKAGE_PATH` points to the installed `@earendil-works/pi-coding-agent` directory.
+- Run the full test suite with `npm test`; prerequisites and validation limits are in `README.md` and CI provisioning in `.github/workflows/test.yml`. Pi/privacy coverage is mandatory, with synthetic PDFs and offline providers only.
 - Treat `README.md` as the portable behavior and installation contract; implementation boundaries live in `extensions/show-reg/core.ts` and `extensions/show-reg/index.ts`.
 
 ## Maintaining this file
