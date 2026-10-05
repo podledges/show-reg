@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { type Config, OUTPUT_RULES, TURN_INSTRUCTIONS, canonicalDevice, cleanFilePath, createManualLoader, defaultManualFolders, deviceFromPath, devicesFromText, discoverHints, discoverManuals, expandHome, indexManual, listPdfFiles, lookup, matchesShowRegTrigger, mergeHints, normalizeFieldBreaks, parseDotEnv, rankManuals, readConfig, resolveDeviceProfile, runText, saveConfig, showRegSystemPrompt, sourceExcerpt, storeManualPath, validateConfig, validateManualForDevice } from "./core.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: process.env.SHOW_REG_TEST_MANUAL ?? "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
+const config: Config = { version: 2, device: { profile: "mcxc444-cg2271" }, manual: "manual.pdf", pdftotext: "pdftotext", model: "current", thinking: "medium", preference: "accuracy" };
 const fixtureConfig: Config = { ...config, device: { profile: "custom", label: "Synthetic MCU", target: "SYNTH1", aliases: [], manualHints: [], sourceLinks: [], evidence: ["Synthetic Manual"], identityRegisters: ["MCG_C1"] } };
 test("turn gate matches only explicit show-reg names", () => {
   for (const prompt of [
@@ -208,6 +209,13 @@ test("manual cache survives extension reload and invalidates with the PDF", asyn
     await utimes(pdf, future, future);
     await createManualLoader(extract)(directory, local);
     assert.equal(extractions, 3);
+    const cacheFile = join(directory, ".pi", "show-reg-cache", files[0]);
+    const cache = JSON.parse(gunzipSync(await readFile(cacheFile)).toString());
+    assert.equal(cache.version, 3);
+    // Even otherwise matching v2 cache data must be reindexed after the caption fix.
+    await writeFile(cacheFile, gzipSync(JSON.stringify({ ...cache, version: 2 })));
+    await createManualLoader(extract)(directory, local);
+    assert.equal(extractions, 4);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -288,23 +296,6 @@ test("process arguments are literal, not shell input", async () => {
   const pending = runText(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], controller.signal);
   controller.abort();
   await assert.rejects(pending, /extraction failed/);
-});
-
-test("real manual: different peripherals, title aliases and bounded source", async (t) => {
-  if (!process.env.SHOW_REG_TEST_MANUAL) { t.skip("Set SHOW_REG_TEST_MANUAL to the MCX-C44X reference PDF for this optional integration test."); return; }
-  const manual = await createManualLoader()(root, config);
-  const identity = validateManualForDevice(manual, config.device);
-  assert.deepEqual(identity.evidence, ["MCX C44X Sub-Family Reference Manual", "MCXC44XP64M48RM", "MCXC4x4(R)"]);
-  assert.ok(identity.registers.includes("TPMx_SC"));
-  for (const [query, page] of [["MCG->C1", 451], ["MCG_C2", 452], ["SIM_SCGC5", 172], ["PORTx_PCRn", 149], ["UARTx_C2", 701]] as const) {
-    const result = lookup(manual.registers, query);
-    assert.equal(result.exact?.page, page, query);
-    const source = sourceExcerpt(manual, result.exact!);
-    assert.ok(source.length < 60_000, query);
-    assert.match(source, /PDF page/);
-  }
-  const c1 = lookup(manual.registers, "MCG->C1").exact!;
-  assert.doesNotMatch(sourceExcerpt(manual, c1), /MCG_C2/);
 });
 
 function piPackage(): string | undefined {

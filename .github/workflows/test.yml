@@ -14,7 +14,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version: 22.19.0
           cache: npm
+      - name: Provision PDF extraction
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Provision installed Pi loader and runtime
+        run: |
+          npm install --prefix "$RUNNER_TEMP/show-reg-pi" --no-audit --no-fund @earendil-works/pi-coding-agent@0.87.1
+          echo "PI_PACKAGE_PATH=$RUNNER_TEMP/show-reg-pi/node_modules/@earendil-works/pi-coding-agent" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm test

@@ -44,7 +44,7 @@ async function harness() {
   const requests: any[] = [];
   let respond = async (_options: any): Promise<any> => ({ stopReason: "stop", provider: "test", model: "chosen", content: [{ type: "text", text: "Synthetic explanation" }] });
   const runtime = createModels();
-  runtime.setProvider({ id: "test", name: "Offline mock", auth: { apiKey: { resolve: async () => ({ apiKey: "mock-key" }) } }, getModels: () => [model],
+  runtime.setProvider({ id: "test", name: "Offline mock", auth: { apiKey: { name: "Synthetic key", resolve: async () => ({ auth: { apiKey: "mock-key" } }) } }, getModels: () => [model],
     streamSimple(chosen: unknown, context: any, options: any) {
       assert.equal(chosen, model);
       assert.equal(options.apiKey, "mock-key");
@@ -68,7 +68,7 @@ async function harness() {
     transcript.push({ role: "toolResult", toolCallId: "test", toolName: name, ...result, timestamp: 1 });
     return result;
   };
-  return { cwd, ctx, transcript, displays, requests, command, tool, respond: (fn: typeof respond) => { respond = fn; }, cleanup: () => rm(cwd, { recursive: true, force: true }) };
+  return { cwd, ctx, transcript, displays, requests, command, tool, completions: extension.commands.get("show-reg").getArgumentCompletions, respond: (fn: typeof respond) => { respond = fn; }, cleanup: () => rm(cwd, { recursive: true, force: true }) };
 }
 
 test("settings display stays out of actual Pi subsequent context", async () => {
@@ -102,7 +102,7 @@ test("local command and tools exclude source, settings and errors; explanation i
     assert.equal(payload.document, "manual.pdf");
     assert.match(payload.source, /SYNTHETIC_LOCAL_MARKER/);
     assert.doesNotMatch(JSON.stringify(context), /UNREQUESTED_|datasheets\/|show-reg-privacy-/);
-    assert.match(context.messages[0].content[0].text, /supplied bounded register text/);
+    assert.match(context.messages[0].content, /supplied bounded register text/);
     assert.match(h.displays.at(-1)!, /Synthetic explanation/);
     await saveConfig(h.cwd, { ...config, device: { ...config.device, evidence: ["MISSING_IDENTITY"] } } as Config);
     await h.tool("show_register", { register: "TEST_CTRL" });
@@ -111,8 +111,89 @@ test("local command and tools exclude source, settings and errors; explanation i
     await saveConfig(h.cwd, { ...config, pdftotext: "show-reg-no-such-extractor" });
     await h.tool("show_register", { register: "TEST_CTRL" });
     assert.match(h.displays.at(-1)!, /PDF extraction failed \(ENOENT\)/);
-    const contextText = JSON.stringify(convertToLlm(h.transcript));
+    await h.command("show-reg", "explain TEST_CTRL");
+    assert.match(h.displays.at(-1)!, /PDF extraction failed \(ENOENT\)/);
+    const contextText = JSON.stringify(convertToLlm([...h.transcript, { role: "user", content: "Unrelated next turn", timestamp: 2 }]));
     assert.doesNotMatch(contextText, /SYNTHETIC_LOCAL_MARKER|Synthetic Manual|TEST_CTRL|manual.pdf|MISSING_IDENTITY|ENOENT|datasheets|Observed:/);
     assert.equal(h.requests.length, 1);
+    assert.ok(h.completions("exp").some((item: any) => item.value === "explain"));
+    assert.ok(h.completions("TEST_C").some((item: any) => item.value === "TEST_CTRL"));
+  } finally { await h.cleanup(); }
+});
+
+test("explanation preserves model scope, thinking checks, failures and cancellation", async () => {
+  const h = await harness();
+  try {
+    for (const change of [{ thinking: "max" }, { model: "missing/model" }]) {
+      await saveConfig(h.cwd, { ...config, ...change } as Config);
+      await h.command("show-reg", "explain TEST_CTRL");
+      assert.match(h.displays.at(-1)!, /does not support|unavailable/);
+      assert.equal(h.requests.length, 0);
+      await h.command("show-reg", "TEST_CTRL");
+      assert.match(h.displays.at(-1)!, /SYNTHETIC_LOCAL_MARKER/);
+    }
+    await saveConfig(h.cwd, config);
+    h.ctx.scopedModels = [{ model: { provider: "other", id: "scoped" } }];
+    await h.command("show-reg", "explain TEST_CTRL");
+    assert.match(h.displays.at(-1)!, /unavailable/);
+    assert.equal(h.requests.length, 0);
+    h.ctx.scopedModels = [];
+    h.respond(async () => ({ stopReason: "length", content: [{ type: "text", text: "Incomplete answer" }] }));
+    await h.command("show-reg", "explain TEST_CTRL");
+    assert.match(h.displays.at(-1)!, /truncated/);
+    assert.doesNotMatch(h.displays.at(-1)!, /Incomplete answer/);
+    h.respond(async () => ({ stopReason: "error", content: [], errorMessage: "PRIVATE_PROVIDER_ERROR" }));
+    await h.command("show-reg", "explain TEST_CTRL");
+    assert.match(h.displays.at(-1)!, /Model request failed/);
+    assert.doesNotMatch(h.displays.at(-1)!, /PRIVATE_PROVIDER_ERROR/);
+    let started!: () => void;
+    const start = new Promise<void>((done) => { started = done; });
+    h.respond((options) => { started(); return new Promise((_accept, reject) => options.signal.addEventListener("abort", () => reject(new Error("synthetic cancellation")), { once: true })); });
+    const pending = h.command("show-reg", "explain TEST_CTRL");
+    await start;
+    await h.command("show-reg", "cancel");
+    await pending;
+    assert.match(h.displays.at(-1)!, /cancelled/i);
+    assert.equal(h.requests.length, 3);
+    assert.equal(h.requests[0].options.reasoning, "medium");
+    assert.deepEqual(convertToLlm(h.transcript), []);
+  } finally { await h.cleanup(); }
+});
+
+test("configuration saves both recommendation and field-by-field custom profile without leaking", async () => {
+  const h = await harness();
+  try {
+    await h.command("show-reg-config", "");
+    assert.match(h.displays.at(-1)!, /Saved the validated recommendation/);
+    const saved = await readConfig(h.cwd);
+    assert.deepEqual(saved, config);
+    h.ctx.ui.confirm = async (title: string) => title.startsWith("Save these");
+    h.ctx.ui.select = async (_title: string, choices: string[]) => choices[0];
+    h.ctx.ui.input = async (_title: string, initial: string) => initial;
+    await h.command("show-reg-config", "");
+    assert.match(h.displays.at(-1)!, /Saved personal settings in `\.pi\/show-reg.json`/);
+    assert.equal((await readConfig(h.cwd))?.device.profile, "custom");
+    assert.equal((await readConfig(h.cwd))?.manual, config.manual);
+    h.ctx.ui.confirm = async () => false;
+    h.ctx.ui.select = async () => undefined;
+    const before = await readConfig(h.cwd);
+    await h.command("show-reg-config", "");
+    assert.deepEqual(await readConfig(h.cwd), before);
+    assert.deepEqual(convertToLlm(h.transcript), []);
+    assert.equal(h.requests.length, 0);
+  } finally { await h.cleanup(); }
+});
+
+test("headless tool entry points fail closed without claiming source display or calling provider", async () => {
+  const h = await harness();
+  try {
+    h.ctx.hasUI = false;
+    const result = await h.tool("show_register", { register: "TEST_CTRL" });
+    assert.match(result.content[0].text, /failed/);
+    const setup = await h.tool("show_register_setup", {});
+    assert.match(setup.content[0].text, /requires interactive Pi/);
+    await h.command("show-reg", "explain TEST_CTRL");
+    assert.equal(h.requests.length, 0);
+    assert.doesNotMatch(JSON.stringify(convertToLlm(h.transcript)), /SYNTHETIC_LOCAL_MARKER|datasheets|manual.pdf/);
   } finally { await h.cleanup(); }
 });

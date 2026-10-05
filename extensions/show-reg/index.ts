@@ -149,6 +149,7 @@ export default function showReg(pi: ExtensionAPI) {
   };
 
   const performLookup = async (rawQuery: string, ctx: ExtensionContext, signal: AbortSignal, explain = false): Promise<{ text: string; model?: string }> => {
+    if (!ctx.hasUI) throw new Error("Local display requires interactive Pi or a notification-capable RPC client; no lookup or explanation was performed.");
     const root = projectRoot(ctx.cwd);
     const config = await readConfig(root) ?? await quickConfig(root, ctx);
     const query = rawQuery.trim();
@@ -354,6 +355,7 @@ export default function showReg(pi: ExtensionAPI) {
     parameters: Type.Object({}),
     executionMode: "sequential",
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      if (!ctx.hasUI) return { content: [{ type: "text", text: "Local setup display requires interactive Pi or a notification-capable RPC client." }], details: {} };
       try {
         const root = projectRoot(ctx.cwd);
         const old = await readConfig(root);
